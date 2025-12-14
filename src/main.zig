@@ -362,6 +362,13 @@ pub fn main() !void {
 
         try d.draw_ui();
 
+// VRR-friendly pacing for Immediate mode: keep presentation aligned to console video timing (59.94/50Hz).
+if (d.config.present_mode == .immediate and d.config.immediate_pacing != .Off) {
+    d.present_pacer.wait(&d, d.config.immediate_pacing);
+} else {
+    d.present_pacer.reset();
+}
+
         if (d.gctx.present() == .swap_chain_resized) {
             d.on_resize();
         }

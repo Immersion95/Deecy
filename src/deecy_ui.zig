@@ -701,6 +701,9 @@ pub fn draw(self: *@This()) !void {
                 }
                 zgui.separator();
                 _ = zgui.comboFromEnum("Present Mode (Restart required)", &d.config.present_mode);
+                _ = zgui.comboFromEnum("Immediate Pacing (VRR)", &d.config.immediate_pacing);
+                zgui.text("Off: best effort unlimited. Normal/UltraLow: console-like 59.94/50Hz pacing for smooth VRR.", .{});
+                
                 zgui.separator();
                 zgui.text("Experimental settings", .{});
                 _ = zgui.checkbox("Framebuffer Emulation", .{ .v = &d.renderer.ExperimentalFramebufferEmulation });

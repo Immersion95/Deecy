@@ -193,6 +193,83 @@ const ControllerSettings = struct {
     subperipherals: [5]enum { None, VMU } = .{ .VMU, .None, .None, .None, .None },
 };
 
+const ImmediatePacing = enum(u8) {
+    Off,
+    Normal,
+    UltraLow,
+};
+
+const PresentPacer = struct {
+    next_deadline_ns: ?i128 = null,
+
+    /// Returns the console-like video interval based on SPG_CONTROL (PAL -> 50Hz, NTSC -> 59.94Hz).
+    fn intervalNs(d: anytype) i128 {
+        // NTSC is 60*1000/1001 ≈ 59.94 Hz => 1e9 * 1001 / 60000 ≈ 16_683_333 ns (integer).
+        const ntsc_ns: i128 = (1_000_000_000 * 1001) / 60000;
+        const pal_ns: i128 = 20_000_000;
+
+        // Best effort: if we can read the emulated SPG_CONTROL, use it; otherwise default to NTSC.
+        if (@hasField(@TypeOf(d.*.*), "dreamcast")) {
+            const raw = d.dreamcast.gpu._get_register(u32, .SPG_CONTROL).*;
+            const spg: DreamcastModule.Holly.SPG_CONTROL = @bitCast(raw);
+            if (spg.PAL == 1) return pal_ns;
+        }
+        return ntsc_ns;
+    }
+
+    /// Wait until the next deadline. This is console-like pacing: always 59.94/50Hz, frame repetition happens naturally.
+    pub fn wait(self: *PresentPacer, d: anytype, mode: ImmediatePacing) void {
+        if (mode == .Off) return;
+
+        const interval = intervalNs(d);
+
+        const now: i128 = std.time.nanoTimestamp();
+        if (self.next_deadline_ns == null) {
+            self.next_deadline_ns = now + interval;
+            return;
+        }
+
+        var deadline = self.next_deadline_ns.?;
+        // If we're too far behind (e.g. pause, breakpoint), re-sync.
+        if (now > deadline + 2 * interval) {
+            deadline = now + interval;
+        }
+
+        var remaining: i128 = deadline - now;
+        // Failsafe: never wait more than ~2 frame intervals in one go.
+        if (remaining > 2 * interval) remaining = 2 * interval;
+
+        if (remaining > 0) {
+            if (mode == .Normal) {
+                std.Thread.sleep(@as(u64, @intCast(remaining)));
+            } else {
+                // UltraLow: coarse sleep until ~1ms before deadline, then spin for precision.
+                const margin: i128 = 1_000_000; // 1ms
+                if (remaining > margin) {
+                    std.Thread.sleep(@as(u64, @intCast(remaining - margin)));
+                }
+                while (std.time.nanoTimestamp() < deadline) {
+                    // Prevent the loop from being optimized away.
+                    std.mem.doNotOptimizeAway(deadline);
+                }
+            }
+        }
+
+        // Advance to the next tick, with drift protection.
+        const after: i128 = std.time.nanoTimestamp();
+        if (after > deadline + interval) {
+            self.next_deadline_ns = after + interval;
+        } else {
+            self.next_deadline_ns = deadline + interval;
+        }
+    }
+
+    pub fn reset(self: *PresentPacer) void {
+        self.next_deadline_ns = null;
+    }
+};
+
+
 const Configuration = struct {
     per_game_vmu: bool = true,
     display_framerate: bool = true,
@@ -202,6 +279,8 @@ const Configuration = struct {
 
     window_size: struct { width: u32 = 2 * @ceil((16.0 / 9.0 * @as(f32, @floatFromInt(Renderer.NativeResolution.height)))), height: u32 = 2 * Renderer.NativeResolution.height } = .{},
     present_mode: zgpu.wgpu.PresentMode = .fifo,
+immediate_pacing: ImmediatePacing = .Off,
+
     fullscreen: bool = false,
 
     internal_resolution_factor: u32 = 2,
@@ -225,6 +304,7 @@ pub const MaxSaveStates = 4;
 
 window: *zglfw.Window,
 gctx: *zgpu.GraphicsContext = undefined,
+present_pacer: PresentPacer = .{},
 gctx_queue_mutex: std.Thread.Mutex = .{}, // GPU Memory access isn't thread safe. Use this to copy to textures from another thread for example.
 scale_factor: f32 = 1.0,
 
