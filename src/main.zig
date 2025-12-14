@@ -323,41 +323,52 @@ pub fn main() !void {
             }
         }
 
+        // GPU work that does NOT acquire the swapchain texture (offscreen render, texture uploads).
+        // We keep this separate so VRR pacing can happen late without holding the swapchain image.
+        d.gctx_queue_mutex.lock();
+        {
+            defer d.gctx_queue_mutex.unlock();
+
+            // Framebuffer has been written to by the CPU.
+            // Update the host texture and blit it to our render target.
+            // FIXME: Hackishly forced on for .bin files
+            if (binary_path != null or d.dc.gpu.dirty_framebuffer) {
+                d.renderer.update_framebuffer_texture(&d.dc.gpu);
+                // FIXME: Yet another framebuffer hack.
+                //        Skip the framebuffer blit if we recently used the PVR for rendering.
+                //        Some games (like Speed Devils) renders only at 30FPS and each frame is presented twice,
+                //        however we don't actually write back the framebuffer to VRAM, meaning we'd blit garbage to the screen.
+                //        Plus, even if PVR writing to the framebuffer was perfectly emulated, it would still only be at native resolution.
+                if (std.time.microTimestamp() - d.last_frame_timestamp > 40_000)
+                    d.renderer.blit_framebuffer();
+                d.dc.gpu.dirty_framebuffer = false;
+            }
+
+            const render_start = d.renderer.render_start;
+            if (render_start) {
+                try d.renderer.update(&d.dc.gpu);
+                try d.renderer.render(&d.dc.gpu, false);
+                d.renderer.render_start = false;
+
+                const now = std.time.microTimestamp();
+                d.last_n_frametimes.push(now - d.last_frame_timestamp);
+                d.last_frame_timestamp = now;
+            }
+
+            // Debug aid (see force_render). NOTE: This will break if the game renders to textures.
+            if (force_render and !render_start)
+                try d.renderer.render(&d.dc.gpu, false);
+        }
+
+        // VRR-friendly pacing for PresentMode.immediate (kept late to reduce input lag).
+        d.pace_present_if_needed();
+
+        // Swapchain work (acquire + blit to screen + UI) and present.
         d.gctx_queue_mutex.lock();
         defer d.gctx_queue_mutex.unlock();
 
-        // Framebuffer has been written to by the CPU.
-        // Update the host texture and blit it to our render target.
-        // FIXME: Hackishly forced on for .bin files
-        if (binary_path != null or d.dc.gpu.dirty_framebuffer) {
-            d.renderer.update_framebuffer_texture(&d.dc.gpu);
-            // FIXME: Yet another framebuffer hack.
-            //        Skip the framebuffer blit if we recently used the PVR for rendering.
-            //        Some games (like Speed Devils) renders only at 30FPS and each frame is presented twice,
-            //        however we don't actually write back the framebuffer to VRAM, meaning we'd blit garbage to the screen.
-            //        Plus, even if PVR writing to the framebuffer was perfectly emulated, it would still only be at native resolution.
-            if (std.time.microTimestamp() - d.last_frame_timestamp > 40_000)
-                d.renderer.blit_framebuffer();
-            d.dc.gpu.dirty_framebuffer = false;
-        }
-
-        const render_start = d.renderer.render_start;
-        if (render_start) {
-            try d.renderer.update(&d.dc.gpu);
-            try d.renderer.render(&d.dc.gpu, false);
-            d.renderer.render_start = false;
-
-            const now = std.time.microTimestamp();
-            d.last_n_frametimes.push(now - d.last_frame_timestamp);
-            d.last_frame_timestamp = now;
-        }
-
-        // Debug aid (see force_render). NOTE: This will break if the game renders to textures.
-        if (force_render and !render_start)
-            try d.renderer.render(&d.dc.gpu, false);
-
         if (d.dc.gpu.read_register(Holly.FB_R_CTRL, .FB_R_CTRL).enable) {
-            d.renderer.draw(); //  Blit to screen
+            d.renderer.draw(); // Blit to screen
         }
 
         try d.draw_ui();

@@ -202,6 +202,8 @@ const Configuration = struct {
 
     window_size: struct { width: u32 = 2 * @ceil((16.0 / 9.0 * @as(f32, @floatFromInt(Renderer.NativeResolution.height)))), height: u32 = 2 * Renderer.NativeResolution.height } = .{},
     present_mode: zgpu.wgpu.PresentMode = .fifo,
+    /// When using PresentMode.immediate, pace the final present to match the game's effective cadence (VRR-friendly).
+    immediate_present_pacing: bool = false,
     fullscreen: bool = false,
 
     internal_resolution_factor: u32 = 2,
@@ -223,6 +225,16 @@ pub const ConfigFile = "/config.zon";
 
 pub const MaxSaveStates = 4;
 
+const PresentPacer = struct {
+    target_interval_ns: u64 = 0,
+    next_deadline_ns: i128 = 0,
+    initialized: bool = false,
+
+    pub fn reset(self: *PresentPacer) void {
+        self.* = .{};
+    }
+};
+
 window: *zglfw.Window,
 gctx: *zgpu.GraphicsContext = undefined,
 gctx_queue_mutex: std.Thread.Mutex = .{}, // GPU Memory access isn't thread safe. Use this to copy to textures from another thread for example.
@@ -235,6 +247,8 @@ audio_device: *zaudio.Device = undefined,
 config: Configuration = .{},
 toggle_fullscreen_request: bool = false,
 previous_window_position: struct { x: i32 = 0, y: i32 = 0, w: i32 = 0, h: i32 = 0 } = .{},
+
+present_pacer: PresentPacer = .{},
 
 last_frame_timestamp: i64,
 last_n_frametimes: struct {
@@ -1050,6 +1064,94 @@ pub fn on_resize(self: *@This()) void {
         self.config.window_size.height = wh;
     }
     self.renderer.update_blit_to_screen_vertex_buffer();
+}
+
+
+/// VRR-friendly present pacing for PresentMode.immediate.
+/// Call this as late as possible (right before drawing to the swapchain / present) to minimize input latency.
+pub fn pace_present_if_needed(self: *@This()) void {
+    if (self.config.present_mode != .immediate or !self.config.immediate_present_pacing) {
+        self.present_pacer.reset();
+        return;
+    }
+
+    const target_ns = self.compute_target_present_interval_ns();
+    if (target_ns == 0) return;
+
+    const now = std.time.nanoTimestamp();
+
+    if (!self.present_pacer.initialized or self.present_pacer.target_interval_ns != target_ns) {
+        self.present_pacer.target_interval_ns = target_ns;
+        self.present_pacer.next_deadline_ns = now + @as(i128, @intCast(target_ns));
+        self.present_pacer.initialized = true;
+        return;
+    }
+
+    // If we got behind by a lot (debug pauses, alt-tab), re-anchor.
+    if (now - self.present_pacer.next_deadline_ns > @as(i128, @intCast(target_ns)) * 2) {
+        self.present_pacer.next_deadline_ns = now + @as(i128, @intCast(target_ns));
+        return;
+    }
+
+    sleep_until(self.present_pacer.next_deadline_ns);
+    self.present_pacer.next_deadline_ns += @as(i128, @intCast(target_ns));
+}
+
+fn compute_target_present_interval_ns(self: *@This()) u64 {
+    // Prefer measured cadence from actual rendered frames.
+    if (self.last_n_frametimes.count >= 4) {
+        const avg_us: f64 = @as(f64, @floatFromInt(self.last_n_frametimes.sum())) /
+            @as(f64, @floatFromInt(self.last_n_frametimes.count));
+        const avg_ns: u64 = @intFromFloat(avg_us * 1000.0);
+        return snap_interval_ns(avg_ns);
+    }
+
+    // Fallback: PAL vs NTSC video timing bit.
+    const spg = self.dc.gpu.read_register(DreamcastModule.HollyModule.SPG_CONTROL, .SPG_CONTROL);
+    if (spg.PAL == 1) return 20_000_000; // 50.000 Hz
+
+    // NTSC: 60 * 1000/1001 = 59.94...
+    return (1_000_000_000 * 1001) / 60_000;
+}
+
+fn snap_interval_ns(ns: u64) u64 {
+    const ntsc_60: u64 = (1_000_000_000 * 1001) / 60_000; // 59.94
+    const ntsc_30: u64 = (1_000_000_000 * 1001) / 30_000; // 29.97
+    const pal_50: u64 = 20_000_000;
+    const pal_25: u64 = 40_000_000;
+
+    const candidates = [_]u64{ ntsc_60, ntsc_30, pal_50, pal_25 };
+    var best = ns;
+    var best_diff: u64 = std.math.maxInt(u64);
+    for (candidates) |c| {
+        const diff = if (ns > c) ns - c else c - ns;
+        if (diff < best_diff) {
+            best_diff = diff;
+            best = c;
+        }
+    }
+
+    // Snap if within 0.5ms of a known cadence.
+    return if (best_diff <= 500_000) best else ns;
+}
+
+fn sleep_until(deadline_ns: i128) void {
+    while (true) {
+        const now = std.time.nanoTimestamp();
+        if (now >= deadline_ns) break;
+        const remaining = deadline_ns - now;
+
+        // Coarse sleep then short spin for precision.
+        if (remaining > 2_000_000) {
+            const sleep_ns: u64 = @intCast(@max(@as(i128, 0), remaining - 1_000_000));
+            std.time.sleep(sleep_ns);
+        } else {
+            while (std.time.nanoTimestamp() < deadline_ns) {
+                std.atomic.spinLoopHint();
+            }
+            break;
+        }
+    }
 }
 
 pub fn draw_ui(self: *@This()) !void {

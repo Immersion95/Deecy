@@ -701,6 +701,12 @@ pub fn draw(self: *@This()) !void {
                 }
                 zgui.separator();
                 _ = zgui.comboFromEnum("Present Mode (Restart required)", &d.config.present_mode);
+                // VRR-friendly pacing for PresentMode.immediate (no restart required)
+                var immediate_pacing = d.config.immediate_present_pacing;
+                if (zgui.checkbox("Immediate frame pacing (VRR, low latency)", .{ .v = &immediate_pacing })) {
+                    d.config.immediate_present_pacing = immediate_pacing;
+                    d.present_pacer.reset();
+                }
                 zgui.separator();
                 zgui.text("Experimental settings", .{});
                 _ = zgui.checkbox("Framebuffer Emulation", .{ .v = &d.renderer.ExperimentalFramebufferEmulation });
