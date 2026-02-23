@@ -133,6 +133,8 @@ fn glfw_drop_callback(window: *zglfw.Window, count: i32, paths: [*][*:0]const u8
 fn glfw_resize_callback(window: *zglfw.Window, width: i32, height: i32) callconv(.c) void {
     const maybe_app = window.getUserPointer(@This());
     if (maybe_app) |app| {
+        app.gctx_queue_mutex.lock();
+        defer app.gctx_queue_mutex.unlock();
         if (width > 0 and height > 0) {
             app.gctx.surface.configure(.{
                 .device = app.gctx.device,
