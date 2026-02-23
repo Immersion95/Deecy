@@ -327,20 +327,28 @@ pub const Dreamcast = struct {
         const flash_bytes_read = try flash_file.readAll(self.flash.data);
         if (flash_bytes_read != 0x20000) return error.InvalidFlashSize;
 
+        // Some flash dumps floating around are missing some partition headers (not fully formatted, I guess).
+        const PartitionHeader: []const u8 = "KATANA_FLASH____";
+        inline for (.{ .{ 0x00000, 0x04 }, .{ 0x10000, 0x03 }, .{ 0x1C000, 0x02 } }) |partition| {
+            @memset(self.flash.data[partition[0]..][0..0x20], 0xFF);
+            @memcpy(self.flash.data[partition[0]..][0..PartitionHeader.len], PartitionHeader);
+            @memcpy(self.flash.data[partition[0]..][0x10..0x12], &[_]u8{ partition[1], 0x00 });
+        }
+
         // Adjust factory settings (read-only partition). Two identical copies of the settings.
         // Region
-        self.flash.data[0x1A002] = @as(u8, '0') + @intFromEnum(region);
-        self.flash.data[0x1A0A2] = @as(u8, '0') + @intFromEnum(region);
+        self.flash.data[0x1A002] = '0' + @intFromEnum(region);
+        self.flash.data[0x1A0A2] = '0' + @intFromEnum(region);
         // Default language
-        self.flash.data[0x1A003] = @as(u8, '0') + @intFromEnum(bios_config.language);
-        self.flash.data[0x1A0A3] = @as(u8, '0') + @intFromEnum(bios_config.language);
+        self.flash.data[0x1A003] = '0' + @intFromEnum(bios_config.language);
+        self.flash.data[0x1A0A3] = '0' + @intFromEnum(bios_config.language);
         // Broadcast format
         const broadcast: enum(u8) { NTSC = 0, PAL = 1, @"PAL-M" = 2, @"PAL-N" = 3 } = switch (region) {
             .Europe => .PAL,
             else => .NTSC,
         };
-        self.flash.data[0x1A004] = @as(u8, '0') + @intFromEnum(broadcast);
-        self.flash.data[0x1A0A4] = @as(u8, '0') + @intFromEnum(broadcast);
+        self.flash.data[0x1A004] = '0' + @intFromEnum(broadcast);
+        self.flash.data[0x1A0A4] = '0' + @intFromEnum(broadcast);
 
         // Search system config block, or allocate it, and fill it with user preferences.
         const system_block = self.flash.get_or_allocate_logical_block(Flash.SystemConfigPayload, Flash.SystemSettings, Flash.SystemConfigPayload.LogicalBlockNumber);
