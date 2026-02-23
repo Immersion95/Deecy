@@ -745,7 +745,7 @@ pub fn draw(self: *@This()) !void {
                     }
                     zgui.text("Curent Resolution: {d}x{d}", .{ d.renderer.resolution.width, d.renderer.resolution.height });
                     zgui.setNextItemWidth(dropdown_size);
-                    var resolution: enum(u8) { Native = 1, x2 = 2, x3 = 3, x4 = 4, x5 = 5 } = @enumFromInt(d.renderer.resolution.width / Deecy.Renderer.NativeResolution.width);
+                    var resolution: enum(u8) { Native = 1, x2 = 2, x3 = 3, x4 = 4, x5 = 5, x6 = 6 } = @enumFromInt(d.renderer.resolution.width / Deecy.Renderer.NativeResolution.width);
                     if (zgui.comboFromEnum("Resolution", &resolution)) {
                         d.gctx_queue_mutex.lock();
                         defer d.gctx_queue_mutex.unlock();

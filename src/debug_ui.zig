@@ -1416,7 +1416,7 @@ pub fn draw(self: *@This(), d: *Deecy) !void {
 
     if (zgui.begin("Renderer", .{})) {
         // Lower values won't always be functional for higher resolutions
-        var oit_horizontal_slices: enum(u32) { @"1" = 1, @"2" = 2, @"3" = 3, @"4" = 4, @"5" = 5, @"6" = 6, @"7" = 7, @"8" = 8, @"9" = 9, @"10" = 10 } = @enumFromInt(d.renderer.oit_horizontal_slices);
+        var oit_horizontal_slices: enum(u32) { @"1" = 1, @"2" = 2, @"3" = 3, @"4" = 4, @"5" = 5, @"6" = 6, @"7" = 7, @"8" = 8, @"9" = 9, @"10" = 10, @"11" = 11, @"12" = 12, @"13" = 13, @"14" = 14, @"15" = 15, @"16" = 16 } = @enumFromInt(d.renderer.oit_horizontal_slices);
         if (zgui.comboFromEnum("OIT Slices", &oit_horizontal_slices)) {
             d.renderer.oit_horizontal_slices = @intFromEnum(oit_horizontal_slices);
             // Makes sure oit_horizontal_slices is a divisor of the vertical resolution
