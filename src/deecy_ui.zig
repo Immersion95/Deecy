@@ -1036,6 +1036,7 @@ pub fn draw(self: *@This()) !void {
                         defer if (was_running) d.start();
                         d.config.aica_sync = aica_sync;
                     }
+                    _ = zgui.sliderFloat("VMU Beep Volume", .{ .v = &d.config.vmu_alarm_volume, .min = 0.0, .max = 1.0, .flags = .{} });
                     zgui.endTabItem();
                 }
 

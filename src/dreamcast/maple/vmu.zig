@@ -105,6 +105,7 @@ backing_file_path: []const u8,
 last_unsaved_change: ?i64 = null,
 
 on_screen_update: ?struct { function: *const fn (userdata: ?*anyopaque, data: [*]const u8) void, userdata: ?*anyopaque } = null,
+on_timer_alarm: ?struct { function: *const fn (userdata: ?*anyopaque, alw0: u8, ald0: u8, alw1: u8, ald1: u8) void, userdata: ?*anyopaque } = null,
 
 pub fn init(allocator: std.mem.Allocator, backing_file_path: []const u8) !@This() {
     var vmu: @This() = .{
@@ -315,15 +316,15 @@ pub fn block_write(self: *@This(), function: u32, partition: u8, phase: u8, bloc
 }
 
 pub fn set_condition(self: *@This(), function: u32, data: []const u32) void {
-    _ = self;
-    _ = data;
     switch (function) {
         FunctionCodesMask.Timer.as_u32() => {
-            // "An alarm is buzzer output produced by a pulse generator that is controlled by the Timer Function's built-in counter.
-            //  The Timer Function can support a maximum of two alarm types.
-            //  The alarm types that can be used are declared in the function definition block. The volume of the alarms cannot be adjusted.""
-
-            // data holds the duty cycle of two alarms.
+            const bytes = std.mem.asBytes(&data[0]);
+            const ALw0 = bytes[0];
+            const ALd0 = bytes[1];
+            const ALw1 = bytes[2];
+            const ALd1 = bytes[3];
+            if (self.on_timer_alarm) |callback|
+                callback.function(callback.userdata, ALw0, ALd0, ALw1, ALd1);
         },
         else => log.err("Unimplemented VMU.set_condition for function: {f}", .{@as(FunctionCodesMask, @bitCast(function))}),
     }

@@ -347,6 +347,7 @@ const Configuration = struct {
     audio_volume: f32 = 0.3,
     dsp_emulation: DreamcastModule.AICAModule.DSPEmulation = .JIT,
     aica_sync: DreamcastModule.AICASync = .@"1 ARM Cycle",
+    vmu_alarm_volume: f32 = 0.2,
 };
 
 pub const ConfigFile = "config.zon";
@@ -361,6 +362,23 @@ scale_factor: f32 = 1.0,
 dc: *Dreamcast = undefined,
 renderer: *Renderer = undefined,
 audio_device: *zaudio.Device = undefined,
+vmu_alarm: struct {
+    period_cycles: u32 = 0,
+    low_cycles: u32 = 0,
+    position: u32 = 0,
+
+    pub fn active(self: @This()) bool {
+        return self.period_cycles > 0 and self.period_cycles > self.low_cycles;
+    }
+
+    pub fn sample(self: *@This()) i32 {
+        const MaxVolume: i32 = 0x10000000;
+        const s = if (self.position < self.low_cycles) -MaxVolume else MaxVolume;
+        self.position +%= 1;
+        if (self.position >= self.period_cycles) self.position = 0;
+        return s;
+    }
+} = .{},
 
 config: Configuration = .{},
 toggle_fullscreen_request: bool = false,
@@ -874,6 +892,26 @@ pub fn load_vmu(self: *@This(), port: u8, slot: u8, vmu_path: []const u8) !void 
         }), .userdata = self.ui };
         self.ui.vmu_displays[port].valid = true;
     }
+    self.dc.maple.ports[port].subperipherals[slot].?.VMU.on_timer_alarm = .{ .function = @ptrCast(&vmu_alarm_callback), .userdata = self };
+}
+
+fn vmu_alarm_callback(self: *@This(), alw0: u8, ald0: u8, alw1: u8, ald1: u8) void {
+    // NOTE: All VMUs currently share the same callback and a single alarm is supported.
+    if (alw0 == 0 or ald0 == 0) {
+        self.vmu_alarm.period_cycles = 0;
+        self.vmu_alarm.low_cycles = 0;
+        self.vmu_alarm.position = 0;
+    } else {
+        const w: f32 = @floatFromInt(alw0);
+        const d: f32 = @floatFromInt(ald0);
+        // Measured frequencies: 3876 at 0xFF, 5211 at 0xC0, 7752 at 0x80
+        const frequency = 3876.0 + (1.0 - w / 255.0) * 7752.0;
+        const period = DreamcastModule.AICAModule.AICA.SampleRate / frequency;
+        const duty_ratio: f32 = d / w;
+        self.vmu_alarm.period_cycles = @intFromFloat(period);
+        self.vmu_alarm.low_cycles = @intFromFloat(period * duty_ratio);
+    }
+    if (alw1 != 0 or ald1 != 0) deecy_log.warn("Unimplemented VMU second alarm: W={X} D={X}", .{ alw1, ald1 });
 }
 
 pub fn enable_controller(self: *@This(), port: u8, value: bool) !void {
@@ -1706,6 +1744,14 @@ fn audio_callback(
     for (0..2 * frame_count) |i| {
         out[i] = 30000 *| aica.sample_buffer[aica.sample_read_offset];
         aica.sample_read_offset = (aica.sample_read_offset + 1) % aica.sample_buffer.len;
+    }
+
+    if (self.config.vmu_alarm_volume > 0.0 and self.vmu_alarm.active()) {
+        for (0..frame_count) |i| {
+            const s: i32 = @intFromFloat(self.config.vmu_alarm_volume * @as(f32, @floatFromInt(self.vmu_alarm.sample())));
+            out[2 * i + 0] += s;
+            out[2 * i + 1] += s;
+        }
     }
 }
 
