@@ -504,7 +504,7 @@ pub fn create(allocator: std.mem.Allocator) !*@This() {
             if (!helpers.use_wayland(self._allocator))
                 zglfw.windowHint(.visible, false);
 
-            self.window = try zglfw.Window.create(@intCast(config.window_size.width), @intCast(config.window_size.height), "Deecy", null);
+            self.window = try zglfw.Window.create(@intCast(config.window_size.width), @intCast(config.window_size.height), "Deecy", null, null);
             glfwSetWindowIcon(self.window, icons.len, &icons);
             if (builtin.os.tag == .windows)
                 @import("dwmapi.zig").allow_dark_mode(self.window, true);

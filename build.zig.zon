@@ -38,8 +38,8 @@
             .hash = "nfdzig-0.1.0-11fxvN6IBgD5rvvfjrw1wPqibMsbUJ-h2ZcGR6FOEvrm",
         },
         .zglfw = .{
-            .url = "git+https://github.com/Senryoku/zglfw.git#5e2210141840ea35171dc90dc503ed085efcc655",
-            .hash = "zglfw-0.10.0-dev-zgVDNDbQIQCV4wt38DKoANX6W1mc0MFA97LI9d6vot9y",
+            .url = "git+https://github.com/Senryoku/zglfw.git#f30d5e926d7bb4449cca926092d3851f52edf937",
+            .hash = "zglfw-0.10.0-dev-zgVDNGK_JQAgkrsKRDze2u_peWzXx9dxcws6jaBw8Djr",
         },
     },
 }
