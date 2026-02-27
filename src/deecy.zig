@@ -11,6 +11,68 @@ const zgui = @import("zgui");
 const zaudio = @import("zaudio");
 
 extern fn glfwSetWindowIcon(window: *zglfw.Window, count: i32, images: [*]const zglfw.Image) void;
+
+// GLFW joystick callback — no userdata parameter in the C API, so we need a module-level pointer.
+const GLFWJoystickFun = *const fn (jid: c_int, event: c_int) callconv(.c) void;
+extern fn glfwSetJoystickCallback(callback: ?GLFWJoystickFun) ?GLFWJoystickFun;
+const GLFW_CONNECTED: c_int = 0x00040001;
+const GLFW_DISCONNECTED: c_int = 0x00040002;
+
+
+
+/// Module-level pointer used by glfw_joystick_callback (GLFW gives us no userdata for joystick events).
+var _joystick_callback_instance: ?*Self = null;
+
+// XInput — used on Windows to read gamepad state independently of window focus.
+// GLFW uses DirectInput/XInput under the hood but gates state delivery on foreground focus.
+// Calling XInputGetState directly bypasses that gate entirely, which is what Steam Input needs.
+const XInputGamepad = extern struct {
+    wButtons: u16,
+    bLeftTrigger: u8,
+    bRightTrigger: u8,
+    sThumbLX: i16,
+    sThumbLY: i16,
+    sThumbRX: i16,
+    sThumbRY: i16,
+};
+const XInputState = extern struct {
+    dwPacketNumber: u32,
+    Gamepad: XInputGamepad,
+};
+extern "xinput1_4" fn XInputGetState(dwUserIndex: u32, pState: *XInputState) u32;
+const XINPUT_ERROR_SUCCESS: u32 = 0;
+
+/// Convert an XInput gamepad snapshot into a zglfw.Gamepad.State so the existing
+/// button-mapping code below needs no changes.
+fn xinput_to_glfw(xi: XInputGamepad) zglfw.Gamepad.State {
+    var s: zglfw.Gamepad.State = .{};
+    const b = xi.wButtons;
+    // GLFW standard gamepad button layout
+    s.buttons[0]  = if (b & 0x1000 != 0) .press else .release; // A
+    s.buttons[1]  = if (b & 0x2000 != 0) .press else .release; // B
+    s.buttons[2]  = if (b & 0x4000 != 0) .press else .release; // X
+    s.buttons[3]  = if (b & 0x8000 != 0) .press else .release; // Y
+    s.buttons[4]  = if (b & 0x0100 != 0) .press else .release; // left_bumper
+    s.buttons[5]  = if (b & 0x0200 != 0) .press else .release; // right_bumper
+    s.buttons[6]  = if (b & 0x0020 != 0) .press else .release; // back
+    s.buttons[7]  = if (b & 0x0010 != 0) .press else .release; // start
+    s.buttons[8]  = .release;                                    // guide (no XInput bit)
+    s.buttons[9]  = if (b & 0x0040 != 0) .press else .release; // left_thumb
+    s.buttons[10] = if (b & 0x0080 != 0) .press else .release; // right_thumb
+    s.buttons[11] = if (b & 0x0001 != 0) .press else .release; // dpad_up
+    s.buttons[12] = if (b & 0x0008 != 0) .press else .release; // dpad_right
+    s.buttons[13] = if (b & 0x0002 != 0) .press else .release; // dpad_down
+    s.buttons[14] = if (b & 0x0004 != 0) .press else .release; // dpad_left
+    // Axes: left_x, left_y, right_x, right_y (GLFW Y is inverted vs XInput)
+    s.axes[0] =  @as(f32, @floatFromInt(xi.sThumbLX)) / 32767.0;
+    s.axes[1] = -@as(f32, @floatFromInt(xi.sThumbLY)) / 32767.0;
+    s.axes[2] =  @as(f32, @floatFromInt(xi.sThumbRX)) / 32767.0;
+    s.axes[3] = -@as(f32, @floatFromInt(xi.sThumbRY)) / 32767.0;
+    // Triggers: XInput 0-255 → GLFW -1..1
+    s.axes[4] = @as(f32, @floatFromInt(xi.bLeftTrigger))  / 127.5 - 1.0;
+    s.axes[5] = @as(f32, @floatFromInt(xi.bRightTrigger)) / 127.5 - 1.0;
+    return s;
+}
 const icon_48_data = @embedFile("assets/icon-48.rgba");
 const icon_32_data = @embedFile("assets/icon-32.rgba");
 const icon_16_data = @embedFile("assets/icon-small-16.rgba");
@@ -126,6 +188,50 @@ fn glfw_drop_callback(window: *zglfw.Window, count: i32, paths: [*][*:0]const u8
         }
         if (count > 1) {
             deecy_log.warn("Drop only supports 1 file at a time :)", .{});
+        }
+    }
+}
+
+/// Bug fix #1 — XInput/Steam Input device not detected at startup.
+///
+/// GLFW only scans joysticks once (in auto_populate_joysticks). If Steam Input hasn't yet
+/// registered the virtual XInput device at that exact moment, the controller is missed forever.
+/// This callback fires whenever a joystick is connected/disconnected at the OS level, so we
+/// automatically fill the first free slot — no manual reset required.
+fn glfw_joystick_callback(jid: c_int, event: c_int) callconv(.c) void {
+    const self = _joystick_callback_instance orelse return;
+
+    if (event == GLFW_CONNECTED) {
+        const joystick: zglfw.Joystick = @enumFromInt(jid);
+        // Only handle devices that expose a standard gamepad mapping.
+        if (joystick.asGamepad() == null) return;
+
+        // Check if this joystick is already tracked (e.g. re-connect of a known device).
+        for (self.controllers) |slot| {
+            if (slot) |ctrl| {
+                if (ctrl.id == joystick) return; // already assigned
+            }
+        }
+        // Assign to first free slot.
+        for (&self.controllers) |*slot| {
+            if (slot.* == null) {
+                slot.* = .{ .id = joystick };
+                deecy_log.info("Joystick {d} connected — assigned to free slot", .{jid});
+                return;
+            }
+        }
+        deecy_log.warn("Joystick {d} connected but all 4 slots are occupied", .{jid});
+
+    } else if (event == GLFW_DISCONNECTED) {
+        const joystick: zglfw.Joystick = @enumFromInt(jid);
+        for (&self.controllers) |*slot| {
+            if (slot.*) |ctrl| {
+                if (ctrl.id == joystick) {
+                    slot.* = null;
+                    deecy_log.info("Joystick {d} disconnected", .{jid});
+                    return;
+                }
+            }
         }
     }
 }
@@ -474,7 +580,13 @@ pub fn create(allocator: std.mem.Allocator) !*@This() {
     deecy_log.info("Deecy {s} {s} {t} (Commit {s})", .{ comptime_config.version, helpers.title_case_enum(builtin.os.tag), comptime_config.optimize, comptime_config.git_commit });
 
     _ = zglfw.setErrorCallback(glfw_error_callback);
+
     try zglfw.init();
+
+    // Bug fix #1 — register the joystick hot-plug callback immediately after GLFW init,
+    // before the joystick scan thread starts, so no connection event can slip through.
+    _joystick_callback_instance = null; // will be set once `self` is initialised below
+    _ = glfwSetJoystickCallback(glfw_joystick_callback);
 
     const self = try allocator.create(@This());
     self.* = .{
@@ -484,6 +596,8 @@ pub fn create(allocator: std.mem.Allocator) !*@This() {
         .shortcuts = try .init(allocator),
         ._allocator = allocator,
     };
+    // Now that `self` is valid, arm the joystick callback (Bug fix #1).
+    _joystick_callback_instance = self;
 
     {
         // NOTE: For some reason Joystick initialization is the longest operation in here on Windows. Start ASAP and in parallel of context creation and window creation (second longest operation).
@@ -562,6 +676,18 @@ pub fn create(allocator: std.mem.Allocator) !*@This() {
             self.gctx.surface.getCurrentTexture(&surface);
             _ = self.gctx.present();
             self.window.show();
+            // On Windows, Steam keeps the focus when launching a game, which means
+            // XInput's virtual device appears disconnected until the user clicks.
+            // Force our window to the foreground immediately so input works from frame 1.
+            if (comptime builtin.os.tag == .windows) {
+                const hwnd = zglfw.getWin32Window(self.window);
+                const win32 = struct {
+                    extern "user32" fn SetForegroundWindow(hWnd: std.os.windows.HWND) std.os.windows.BOOL;
+                    extern "user32" fn SetFocus(hWnd: std.os.windows.HWND) ?std.os.windows.HWND;
+                };
+                _ = win32.SetForegroundWindow(hwnd);
+                _ = win32.SetFocus(hwnd);
+            }
         }
 
         if (comptime std.log.logEnabled(.debug, .deecy)) {
@@ -632,6 +758,11 @@ pub fn create(allocator: std.mem.Allocator) !*@This() {
 pub fn destroy(self: *@This()) void {
     self.pause();
     self.wait_async_jobs();
+
+    // Disarm the joystick callback before freeing — prevents use-after-free if a
+    // joystick event fires during or after teardown (Bug fix #1).
+    _ = glfwSetJoystickCallback(null);
+    _joystick_callback_instance = null;
 
     self.save_config() catch |err| deecy_log.err("Error writing config: {t}", .{err});
     std.zon.parse.free(self._allocator, self.config);
@@ -1047,7 +1178,18 @@ pub fn poll_controllers(self: *@This()) void {
                         if (self.controllers[controller_idx]) |*host_controller| {
                             if (host_controller.id.isPresent()) {
                                 if (host_controller.id.asGamepad()) |gamepad| {
-                                    const gamepad_state = gamepad.getState() catch continue;
+                                    // On Windows use XInputGetState directly — it is focus-independent,
+                                    // which means Steam Input (virtual XInput device) always delivers
+                                    // button data regardless of whether Deecy's window has focus.
+                                    // We use controller_idx (0-3) as the XInput user index, NOT the
+                                    // GLFW joystick ID — GLFW IDs count all HID devices and don't
+                                    // match XInput slots. Port 0 → XInput 0, port 1 → XInput 1, etc.
+                                    // On other platforms keep the normal GLFW path.
+                                    const gamepad_state: zglfw.Gamepad.State = if (comptime builtin.os.tag == .windows) blk: {
+                                        var xi: XInputState = undefined;
+                                        if (XInputGetState(@intCast(controller_idx), &xi) != XINPUT_ERROR_SUCCESS) continue;
+                                        break :blk xinput_to_glfw(xi.Gamepad);
+                                    } else gamepad.getState() catch continue;
                                     defer host_controller.last_state = gamepad_state;
 
                                     inline for (std.meta.fields(zglfw.Gamepad.Button)) |button| {

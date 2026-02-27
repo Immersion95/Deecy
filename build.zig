@@ -122,6 +122,8 @@ pub fn build(b: *std.Build) !void {
             deecy_module.linkSystemLibrary("dwmapi", .{});
             // Windows Multimedia API for timeBeginPeriod
             deecy_module.linkSystemLibrary("winmm", .{});
+            // XInput — direct gamepad polling, focus-independent (needed for Steam Input)
+            deecy_module.linkSystemLibrary("xinput1_4", .{});
 
             // Wrapper in console mode for launching Deecy from a terminal with proper console interactions.
             const wrapper = b.addExecutable(.{
