@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) !void {
     const use_appdata_dir = b.option(bool, "use_appdata_dir", "Prepend the platform specific AppData directory to data_path and userdata_path (default: false)") orelse false;
     const no_console = if (target.result.os.tag == .windows) b.option(bool, "no_console", "Do not open the console on Windows (default: false for debug builds, true otherwise)") orelse (optimize != .Debug) else false;
     const git_commit = b.option([]const u8, "git_commit", "Current git commit hash (default: auto detect)") orelse get_git_commit(b);
-    const sdl3_path = b.option([]const u8, "sdl3-path", "Path to a SDL3 dev distribution. Used to locate SDL3 import libs/DLL on Windows when SDL3 is not installed system-wide. Ignored on other platforms.");
+    const sdl3_path = b.option([]const u8, "sdl3-path", "Path to a SDL3 dev distribution/prefix. If set, adds <path>/lib and <path>/include to the search paths before linking SDL3.");
 
     const dc_options = b.addOptions();
     dc_options.addOption(bool, "mmu", mmu);
@@ -186,10 +186,8 @@ pub fn build(b: *std.Build) !void {
         },
         else => {
             // SDL3 is used as the controller input backend on Linux/macOS
-            // too. Install via your distribution (Debian/Ubuntu:
-            // `sudo apt install libsdl3-dev`; Fedora:
-            // `sudo dnf install SDL3-devel`; Arch: `sudo pacman -S sdl3`;
-            // macOS: `brew install sdl3`).
+            // too. Provide it either via your system package manager or pass
+            // `-Dsdl3-path=<prefix>` to point to a custom install.
             deecy_module.linkSystemLibrary("SDL3", .{ .needed = true });
 
             if (enable_dreampicoport) {
