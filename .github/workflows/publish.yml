@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt -y install libgtk-3-dev libudev-dev
+          sudo apt -y install libgtk-3-dev libudev-dev cmake ninja-build build-essential pkg-config
 
       - uses: actions/checkout@v4
         with:
@@ -42,10 +42,23 @@ jobs:
 
       - name: Install SDL3 (Linux)
         if: runner.os == 'Linux'
-        uses: libsdl-org/setup-sdl@main
-        with:
-          version: ${{ env.SDL3_VERSION }}
-          install-linux-dependencies: true
+        shell: bash
+        env:
+          SDL3_VERSION: ${{ env.SDL3_VERSION }}
+        run: |
+          SDL3_PREFIX="$RUNNER_TEMP/sdl3"
+          curl -L "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.tar.gz" -o /tmp/SDL3.tar.gz
+          tar -xzf /tmp/SDL3.tar.gz -C /tmp
+          cmake -S "/tmp/SDL3-${SDL3_VERSION}" -B /tmp/SDL3-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$SDL3_PREFIX" \
+            -DSDL_SHARED=ON \
+            -DSDL_STATIC=OFF
+          cmake --build /tmp/SDL3-build
+          cmake --install /tmp/SDL3-build
+          echo "SDL3_PATH=$SDL3_PREFIX" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$SDL3_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$SDL3_PREFIX/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Install SDL3 (Windows)
         if: runner.os == 'Windows'
@@ -85,7 +98,7 @@ jobs:
           if [ "${{ runner.os }}" == "Windows" ]; then
             zig build --release=fast -Dcpu=${{ matrix.cpu }} -Dsdl3-path="$SDL3_PATH"
           else
-            zig build --release=fast -Dcpu=${{ matrix.cpu }}
+            zig build --release=fast -Dcpu=${{ matrix.cpu }} -Dsdl3-path="$SDL3_PATH"
           fi
 
       - name: Prepare Artifacts

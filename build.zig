@@ -125,6 +125,11 @@ pub fn build(b: *std.Build) !void {
         .root_module = deecy_module,
     });
 
+    if (sdl3_path) |p| {
+        deecy_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{p}) });
+        deecy_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{p}) });
+    }
+
     switch (target.result.os.tag) {
         .windows => {
             // DwmSetWindowAttribute
@@ -140,10 +145,6 @@ pub fn build(b: *std.Build) !void {
             //     SDL3-devel-<version>-mingw.tar.gz), unpack it somewhere, and
             //     pass `-Dsdl3-path=...\\x86_64-w64-mingw32` to `zig build`.
             // SDL3.dll must be shipped alongside Deecy.exe at runtime.
-            if (sdl3_path) |p| {
-                deecy_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{p}) });
-                deecy_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{p}) });
-            }
             deecy_module.linkSystemLibrary("SDL3", .{});
             // Windows API libraries that SDL3 can reference internally. These
             // are mostly relevant if a static SDL3 archive is used and are
