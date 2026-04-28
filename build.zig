@@ -130,6 +130,12 @@ pub fn build(b: *std.Build) !void {
             deecy_module.linkSystemLibrary("dwmapi", .{});
             // Windows Multimedia API for timeBeginPeriod
             deecy_module.linkSystemLibrary("winmm", .{});
+            // SDL2 is used as the controller input backend (see
+            // src/input/gamepad.zig). On Windows, SDL2 must be installed via
+            // the system SDK (MSYS2: `pacman -S mingw-w64-x86_64-SDL2`, or
+            // drop SDL2.dll + SDL2.lib under the compiler's default search
+            // paths). SDL2.dll must be shipped alongside Deecy.exe.
+            deecy_module.linkSystemLibrary("SDL2", .{});
 
             if (enable_dreampicoport) {
                 dc_module.addObjectFile(b.path("libs/dreampicoport-api/windows/libdream_pico_port_api.a"));
@@ -157,6 +163,13 @@ pub fn build(b: *std.Build) !void {
             b.getInstallStep().dependOn(&install_wrapper.step);
         },
         else => {
+            // SDL2 is used as the controller input backend on Linux/macOS
+            // too. Install via your distribution (Debian/Ubuntu:
+            // `sudo apt install libsdl2-dev`; Fedora:
+            // `sudo dnf install SDL2-devel`; Arch: `sudo pacman -S sdl2`;
+            // macOS: `brew install sdl2`).
+            deecy_module.linkSystemLibrary("SDL2", .{ .needed = true });
+
             if (enable_dreampicoport) {
                 dc_module.addObjectFile(b.path("libs/dreampicoport-api/linux/libdream_pico_port_api.a"));
                 dc_module.addObjectFile(b.path("libs/dreampicoport-api/linux/libusb-1.0.a"));

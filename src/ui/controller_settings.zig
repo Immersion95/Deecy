@@ -5,6 +5,7 @@ const zgpu = @import("zgpu");
 
 const Deecy = @import("../deecy.zig");
 const Dreamcast = @import("dreamcast");
+const Gamepad = @import("../input/gamepad.zig");
 const termcolor = @import("termcolor");
 const helpers = @import("helpers");
 
@@ -55,9 +56,9 @@ fn controller_binding_tooltip(d: *Deecy, comptime port: u8, comptime field_name:
     }
 }
 
-fn bind_button(d: *Deecy, comptime port: u8, comptime field_name: [:0]const u8, gamepad_id: ?zglfw.Gamepad) void {
+fn bind_button(d: *Deecy, comptime port: u8, comptime field_name: [:0]const u8, gamepad_id: ?Gamepad.Gamepad) void {
     comptime var controller_field_name = field_name;
-    if (!@hasField(Deecy.ControllerBindings, field_name) or @TypeOf(@field(d.config.controllers_bindings[port], field_name)) != ?zglfw.Gamepad.Button)
+    if (!@hasField(Deecy.ControllerBindings, field_name) or @TypeOf(@field(d.config.controllers_bindings[port], field_name)) != ?Gamepad.Button)
         controller_field_name = controller_field_name ++ "_button";
     if (zgui.isMouseReleased(.left)) {
         if (gamepad_id) |gamepad|
@@ -70,7 +71,7 @@ fn bind_button(d: *Deecy, comptime port: u8, comptime field_name: [:0]const u8, 
     }
 }
 
-fn bind_axis(d: *Deecy, comptime port: u8, comptime field_name: [:0]const u8, gamepad_id: ?zglfw.Gamepad) void {
+fn bind_axis(d: *Deecy, comptime port: u8, comptime field_name: [:0]const u8, gamepad_id: ?Gamepad.Gamepad) void {
     if (zgui.isMouseReleased(.left)) {
         if (gamepad_id) |gamepad|
             @field(d.config.controllers_bindings[port], field_name) = wait_for.controller_axis(d, gamepad);
@@ -95,7 +96,7 @@ fn stroke_cubic_curves(draw_list: zgui.DrawList, x: f32, y: f32, s: f32, color: 
     draw_list.pathStroke(.{ .col = color, .flags = .{}, .thickness = thickness });
 }
 
-fn draw_analog_stick(d: *Deecy, comptime port: u8, draw_list: zgui.DrawList, s: f32, p: [2]f32, bg_color: u32, comptime name: [:0]const u8, gamepad_id: ?zglfw.Gamepad, x_axis: u8, y_axis: u8) void {
+fn draw_analog_stick(d: *Deecy, comptime port: u8, draw_list: zgui.DrawList, s: f32, p: [2]f32, bg_color: u32, comptime name: [:0]const u8, gamepad_id: ?Gamepad.Gamepad, x_axis: u8, y_axis: u8) void {
     const stick_outer_size = s * 12;
     const stick_inner_size = s * 10;
     const axis_size = s * 16.0;
@@ -179,7 +180,7 @@ pub fn draw_controller_settings(d: *Deecy, comptime port: u8) !void {
     const buttons = guest_controller.buttons;
     var capabilities: Dreamcast.Maple.Controller.InputCapabilities = @bitCast(guest_controller.subcapabilities[0]);
 
-    var gamepad_id: ?zglfw.Gamepad = null;
+    var gamepad_id: ?Gamepad.Gamepad = null;
     if (d.controllers[port]) |j| {
         if (j.id.isPresent())
             gamepad_id = j.id.asGamepad();
@@ -353,8 +354,8 @@ pub fn draw_controller_settings(d: *Deecy, comptime port: u8) !void {
                     _ = zgui.tableNextColumn();
                     if (zgui.button(Icons.Pen ++ "##" ++ field.name, .{})) {
                         const maybe_button = switch (field.type) {
-                            ?zglfw.Gamepad.Button => wait_for.controller_button(d, gamepad),
-                            ?zglfw.Gamepad.Axis => wait_for.controller_axis(d, gamepad),
+                            ?Gamepad.Button => wait_for.controller_button(d, gamepad),
+                            ?Gamepad.Axis => wait_for.controller_axis(d, gamepad),
                             else => @compileError("Unexpected field type"),
                         };
                         if (maybe_button) |button|

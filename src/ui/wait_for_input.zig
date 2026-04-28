@@ -2,6 +2,7 @@ const std = @import("std");
 const zglfw = @import("zglfw");
 const zgui = @import("zgui");
 const Deecy = @import("../deecy.zig");
+const Gamepad = @import("../input/gamepad.zig");
 
 // Stupid way of waiting for any key press
 var key_pressed: ?zglfw.Key = null;
@@ -32,9 +33,10 @@ pub fn keyboard(d: *Deecy) zglfw.Key {
     return value.?;
 }
 
-pub fn controller_button(d: *Deecy, gamepad_id: zglfw.Gamepad) ?zglfw.Gamepad.Button {
+pub fn controller_button(d: *Deecy, gamepad_id: Gamepad.Gamepad) ?Gamepad.Button {
     while (true) {
         zglfw.pollEvents();
+        Gamepad.update();
         if (zglfw.getKey(d.window, .escape) == .press) return null;
 
         const gamepad_state = gamepad_id.getState() catch return null;
@@ -47,11 +49,12 @@ pub fn controller_button(d: *Deecy, gamepad_id: zglfw.Gamepad) ?zglfw.Gamepad.Bu
     return null;
 }
 
-pub fn controller_axis(d: *Deecy, gamepad_id: zglfw.Gamepad) ?zglfw.Gamepad.Axis {
+pub fn controller_axis(d: *Deecy, gamepad_id: Gamepad.Gamepad) ?Gamepad.Axis {
     const initial_state = gamepad_id.getState() catch return null;
     const Threshold = 0.1;
     while (true) {
         zglfw.pollEvents();
+        Gamepad.update();
         if (zglfw.getKey(d.window, .escape) == .press) return null;
 
         const gamepad_state = gamepad_id.getState() catch return null;
@@ -65,7 +68,7 @@ pub fn controller_axis(d: *Deecy, gamepad_id: zglfw.Gamepad) ?zglfw.Gamepad.Axis
     return null;
 }
 
-pub fn any_button(d: *Deecy) ?union(enum) { controller: zglfw.Gamepad.Button, keyboard: struct { key: zglfw.Key, modifiers: zglfw.Mods } } {
+pub fn any_button(d: *Deecy) ?union(enum) { controller: Gamepad.Button, keyboard: struct { key: zglfw.Key, modifiers: zglfw.Mods } } {
     const prev_callback = d.window.setKeyCallback(wait_for_key_callback);
     defer {
         reset();
@@ -73,6 +76,7 @@ pub fn any_button(d: *Deecy) ?union(enum) { controller: zglfw.Gamepad.Button, ke
     }
     while (true) {
         zglfw.pollEvents();
+        Gamepad.update();
         if (key_pressed) |key| {
             if (key == .escape) return null;
             return .{ .keyboard = .{ .key = key, .modifiers = modifiers orelse .{} } };

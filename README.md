@@ -85,9 +85,10 @@ You will also need to provide copies of `dc_boot.bin` and `dc_flash.bin` files i
 
 Building on Linux requires these additional dependencies:
  - libgtk-3-dev for [nfd-zig](https://github.com/fabioarnold/nfd-zig) (native file dialog)
+ - libsdl2-dev for the controller input backend
  - libudev-dev for [DreamPicoPort](https://github.com/OrangeFox86/DreamPicoPort). DreamPicoPort support can be disabled with `-Ddreampicoport=false`
 ```sh
-sudo apt install libgtk-3-dev libudev-dev
+sudo apt install libgtk-3-dev libsdl2-dev libudev-dev
 ```
 
 ## Things I know I have to do

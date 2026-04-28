@@ -3,6 +3,7 @@ const zglfw = @import("zglfw");
 
 const termcolor = @import("termcolor");
 const Deecy = @import("../deecy.zig");
+const Gamepad = @import("../input/gamepad.zig");
 const HostPaths = @import("dreamcast").HostPaths;
 
 const log = std.log.scoped(.deecy);
@@ -40,7 +41,7 @@ pub const Modifiers = struct {
 };
 
 pub const Key = union(enum) {
-    controller: zglfw.Gamepad.Button,
+    controller: Gamepad.Button,
     keyboard: struct {
         key: zglfw.Key,
         mods: Modifiers = .{},

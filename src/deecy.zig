@@ -35,6 +35,7 @@ pub const Renderer = @import("./renderer.zig").Renderer;
 pub const UI = @import("./deecy_ui.zig");
 const DebugUI = @import("./debug_ui.zig");
 const Shortcuts = @import("./ui/shortcuts.zig");
+pub const Gamepad = @import("./input/gamepad.zig");
 
 const Cheats = @import("./cheats.zig");
 
@@ -204,32 +205,32 @@ pub const KeyboardBindings = struct {
 };
 
 pub const ControllerBindings = struct {
-    a: ?zglfw.Gamepad.Button = .a,
-    b: ?zglfw.Gamepad.Button = .b,
-    x: ?zglfw.Gamepad.Button = .x,
-    y: ?zglfw.Gamepad.Button = .y,
-    up: ?zglfw.Gamepad.Button = .dpad_up,
-    down: ?zglfw.Gamepad.Button = .dpad_down,
-    left: ?zglfw.Gamepad.Button = .dpad_left,
-    right: ?zglfw.Gamepad.Button = .dpad_right,
-    start: ?zglfw.Gamepad.Button = .start,
-    left_trigger: ?zglfw.Gamepad.Axis = .left_trigger,
-    right_trigger: ?zglfw.Gamepad.Axis = .right_trigger,
-    left_stick_up_down: ?zglfw.Gamepad.Axis = .left_y,
-    left_stick_left_right: ?zglfw.Gamepad.Axis = .left_x,
-    right_stick_up_down: ?zglfw.Gamepad.Axis = .right_y,
-    right_stick_left_right: ?zglfw.Gamepad.Axis = .right_x,
+    a: ?Gamepad.Button = .a,
+    b: ?Gamepad.Button = .b,
+    x: ?Gamepad.Button = .x,
+    y: ?Gamepad.Button = .y,
+    up: ?Gamepad.Button = .dpad_up,
+    down: ?Gamepad.Button = .dpad_down,
+    left: ?Gamepad.Button = .dpad_left,
+    right: ?Gamepad.Button = .dpad_right,
+    start: ?Gamepad.Button = .start,
+    left_trigger: ?Gamepad.Axis = .left_trigger,
+    right_trigger: ?Gamepad.Axis = .right_trigger,
+    left_stick_up_down: ?Gamepad.Axis = .left_y,
+    left_stick_left_right: ?Gamepad.Axis = .left_x,
+    right_stick_up_down: ?Gamepad.Axis = .right_y,
+    right_stick_left_right: ?Gamepad.Axis = .right_x,
     // Digital version of all axes
-    left_trigger_button: ?zglfw.Gamepad.Button = null,
-    right_trigger_button: ?zglfw.Gamepad.Button = null,
-    left_stick_up_button: ?zglfw.Gamepad.Button = null,
-    left_stick_down_button: ?zglfw.Gamepad.Button = null,
-    left_stick_left_button: ?zglfw.Gamepad.Button = null,
-    left_stick_right_button: ?zglfw.Gamepad.Button = null,
-    right_stick_up_button: ?zglfw.Gamepad.Button = null,
-    right_stick_down_button: ?zglfw.Gamepad.Button = null,
-    right_stick_left_button: ?zglfw.Gamepad.Button = null,
-    right_stick_right_button: ?zglfw.Gamepad.Button = null,
+    left_trigger_button: ?Gamepad.Button = null,
+    right_trigger_button: ?Gamepad.Button = null,
+    left_stick_up_button: ?Gamepad.Button = null,
+    left_stick_down_button: ?Gamepad.Button = null,
+    left_stick_left_button: ?Gamepad.Button = null,
+    left_stick_right_button: ?Gamepad.Button = null,
+    right_stick_up_button: ?Gamepad.Button = null,
+    right_stick_down_button: ?Gamepad.Button = null,
+    right_stick_left_button: ?Gamepad.Button = null,
+    right_stick_right_button: ?Gamepad.Button = null,
 };
 
 pub const DefaultVMUPaths = default_vmu_paths: {
@@ -393,13 +394,13 @@ breakpoints: std.ArrayList(u32),
 enabled_cheats: ?[]const Cheats.Cheat = null,
 
 controllers: [4]?struct {
-    id: zglfw.Joystick,
+    id: Gamepad.Joystick,
     rumble: struct {
         active: bool = false,
         power: f32 = 0,
         change: f32 = 0,
     } = .{},
-    last_state: zglfw.Gamepad.State = .{},
+    last_state: Gamepad.State = .{},
     // FIXME: Move to config?
     deadzone: f32 = 0.1,
 
@@ -469,6 +470,13 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
 
     _ = zglfw.setErrorCallback(glfw_error_callback);
     try zglfw.init();
+
+    // Initialize the SDL2-backed gamepad subsystem. We do this eagerly (before
+    // the window thread starts below) so auto_populate_joysticks can enumerate
+    // from a ready state. Failure is non-fatal: keyboard input keeps working.
+    Gamepad.init() catch |err| {
+        deecy_log.err("Failed to initialize gamepad subsystem: {t}. Controllers will be unavailable.", .{err});
+    };
 
     const self = try allocator.create(@This());
     self.* = .{
@@ -670,6 +678,7 @@ pub fn destroy(self: *@This()) void {
     self.gctx.destroy(self._allocator);
 
     self.window.destroy();
+    Gamepad.deinit();
     zglfw.terminate();
 
     self._allocator.destroy(self);
@@ -686,16 +695,17 @@ fn deinit_enabled_cheats(self: *@This()) void {
 fn auto_populate_joysticks(self: *@This()) !void {
     const start_time = std.Io.Clock.awake.now(self.io);
     defer deecy_log.info("Joysticks initialized in {f}", .{start_time.durationTo(std.Io.Clock.awake.now(self.io))});
+    // Make sure SDL has seen any controllers that were already plugged in at
+    // startup. This is a no-op if the subsystem failed to initialize.
+    Gamepad.update();
     var curr_pad: usize = 0;
-    for (0..zglfw.Joystick.maximum_supported) |idx| {
-        const joystick: zglfw.Joystick = @enumFromInt(idx);
-        if (joystick.isPresent()) {
-            if (joystick.asGamepad()) |_| {
-                self.controllers[curr_pad] = .{ .id = joystick };
-                curr_pad += 1;
-                if (curr_pad >= 4)
-                    break;
-            }
+    var it = Gamepad.iterate();
+    while (it.next()) |joystick| {
+        if (joystick.asGamepad()) |_| {
+            self.controllers[curr_pad] = .{ .id = joystick };
+            curr_pad += 1;
+            if (curr_pad >= 4)
+                break;
         }
     }
 }
@@ -1004,6 +1014,9 @@ pub fn stop(self: *@This()) !void {
 }
 
 pub fn update(self: *@This(), delta_time: f32) void {
+    // Pump the SDL event queue and refresh controller state. Must happen
+    // before update_rumble / poll_controllers so both see fresh data.
+    Gamepad.update();
     self.update_rumble(delta_time);
     self.poll_controllers();
     self.dc.maple.flush_vmus();
@@ -1095,13 +1108,13 @@ pub fn poll_controllers(self: *@This()) void {
                                         const gamepad_state = gamepad.getState() catch continue;
                                         defer host_controller.last_state = gamepad_state;
 
-                                        inline for (std.meta.fields(zglfw.Gamepad.Button)) |button| {
+                                        inline for (std.meta.fields(Gamepad.Button)) |button| {
                                             if (gamepad_state.buttons[button.value] == .press and host_controller.last_state.buttons[button.value] == .release)
                                                 self.shortcuts.on_key(.{ .controller = @enumFromInt(button.value) });
                                         }
 
                                         const config = self.config.controllers_bindings[controller_idx];
-                                        const gamepad_binds: [9]struct { ?zglfw.Gamepad.Button, DreamcastModule.Maple.Controller.Buttons } = .{
+                                        const gamepad_binds: [9]struct { ?Gamepad.Button, DreamcastModule.Maple.Controller.Buttons } = .{
                                             .{ config.start, .{ .start = 0 } },
                                             .{ config.up, .{ .up = 0 } },
                                             .{ config.down, .{ .down = 0 } },
@@ -1127,7 +1140,7 @@ pub fn poll_controllers(self: *@This()) void {
                                             c.axis[1] = @trunc(std.math.clamp(gamepad_state.axes[@intFromEnum(axis)], 0.0, 1.0) * 255);
 
                                         const capabilities: DreamcastModule.Maple.Controller.InputCapabilities = @bitCast(c.subcapabilities[0]);
-                                        inline for ([_]struct { host: ?zglfw.Gamepad.Axis, guest: u8 }{
+                                        inline for ([_]struct { host: ?Gamepad.Axis, guest: u8 }{
                                             .{ .host = config.left_stick_left_right, .guest = 2 },
                                             .{ .host = config.left_stick_up_down, .guest = 3 },
                                             .{ .host = config.right_stick_left_right, .guest = 4 },
@@ -1145,7 +1158,7 @@ pub fn poll_controllers(self: *@This()) void {
                                             }
                                         }
                                         // Digital alternatives for all axes
-                                        for ([_]struct { host: ?zglfw.Gamepad.Button, guest_axis: u8, value: u8 }{
+                                        for ([_]struct { host: ?Gamepad.Button, guest_axis: u8, value: u8 }{
                                             .{ .host = config.right_trigger_button, .guest_axis = 0, .value = 255 },
                                             .{ .host = config.left_trigger_button, .guest_axis = 1, .value = 255 },
                                             .{ .host = config.left_stick_up_button, .guest_axis = 3, .value = 0 },

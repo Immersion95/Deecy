@@ -16,6 +16,7 @@ const nfd = @import("nfd");
 
 const Deecy = @import("deecy.zig");
 const HostPaths = Deecy.HostPaths;
+const Gamepad = @import("./input/gamepad.zig");
 const DreamcastModule = @import("dreamcast");
 const MapleModule = DreamcastModule.Maple;
 const Disc = DreamcastModule.GDROM.Disc;
@@ -939,14 +940,14 @@ pub fn draw(self: *@This()) !void {
                         try d.set_per_game_vmu(per_game_vmu);
                     }
 
-                    var available_controllers: std.ArrayList(struct { id: ?zglfw.Joystick, name: [:0]const u8 }) = try .initCapacity(self.allocator, zglfw.Joystick.maximum_supported + 1);
+                    var available_controllers: std.ArrayList(struct { id: ?Gamepad.Joystick, name: [:0]const u8 }) = try .initCapacity(self.allocator, Gamepad.Joystick.maximum_supported + 1);
                     defer available_controllers.deinit(self.allocator);
 
                     available_controllers.appendAssumeCapacity(.{ .id = null, .name = "None" });
 
-                    for (0..zglfw.Joystick.maximum_supported) |idx| {
-                        const joystick: zglfw.Joystick = @enumFromInt(idx);
-                        if (joystick.isPresent()) {
+                    {
+                        var it = Gamepad.iterate();
+                        while (it.next()) |joystick| {
                             if (joystick.asGamepad()) |gamepad| {
                                 available_controllers.appendAssumeCapacity(.{ .id = joystick, .name = gamepad.getName() });
                             }
@@ -999,7 +1000,7 @@ pub fn draw(self: *@This()) !void {
                                                 if (zgui.collapsingHeader(Icons.Gamepad ++ " Controller settings", .{ .default_open = true })) {
                                                     zgui.indent(.{});
                                                     defer zgui.unindent(.{});
-                                                    var gamepad_id: ?zglfw.Gamepad = null;
+                                                    var gamepad_id: ?Gamepad.Gamepad = null;
                                                     if (d.controllers[port]) |j| {
                                                         if (j.id.isPresent())
                                                             gamepad_id = j.id.asGamepad();
