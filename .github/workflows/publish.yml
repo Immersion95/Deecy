@@ -74,13 +74,15 @@ jobs:
           tar -xzf "$env:RUNNER_TEMP\sdl3.tar.gz" -C $extractDir
           $candidate = Get-ChildItem -Path $extractDir -Directory -Recurse |
             Where-Object {
-              (Test-Path (Join-Path $_.FullName "lib\libSDL3.dll.a")) -or
-              (Test-Path (Join-Path $_.FullName "lib\SDL3.dll.a")) -or
-              (Test-Path (Join-Path $_.FullName "lib\libSDL3.a"))
+              $_.Name -eq "x86_64-w64-mingw32" -and (
+                (Test-Path (Join-Path $_.FullName "lib\libSDL3.dll.a")) -or
+                (Test-Path (Join-Path $_.FullName "lib\SDL3.dll.a")) -or
+                (Test-Path (Join-Path $_.FullName "lib\libSDL3.a"))
+              )
             } |
             Select-Object -First 1
           if (-not $candidate) {
-            throw "Could not locate SDL3 MinGW root under $extractDir"
+            throw "Could not locate x86_64 SDL3 MinGW root under $extractDir"
           }
           "SDL3_PATH=$($candidate.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
