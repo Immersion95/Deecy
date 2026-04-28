@@ -59,6 +59,8 @@ jobs:
           echo "SDL3_PATH=$SDL3_PREFIX" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$SDL3_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$SDL3_PREFIX/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$SDL3_PREFIX/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "C_INCLUDE_PATH=$SDL3_PREFIX/include:${C_INCLUDE_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Install SDL3 (Windows)
         if: runner.os == 'Windows'
