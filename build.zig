@@ -127,6 +127,7 @@ pub fn build(b: *std.Build) !void {
 
     if (sdl3_path) |p| {
         deecy_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{p}) });
+        deecy_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib64", .{p}) });
         deecy_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{p}) });
     }
 
