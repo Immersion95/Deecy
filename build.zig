@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) !void {
     const use_appdata_dir = b.option(bool, "use_appdata_dir", "Prepend the platform specific AppData directory to data_path and userdata_path (default: false)") orelse false;
     const no_console = if (target.result.os.tag == .windows) b.option(bool, "no_console", "Do not open the console on Windows (default: false for debug builds, true otherwise)") orelse (optimize != .Debug) else false;
     const git_commit = b.option([]const u8, "git_commit", "Current git commit hash (default: auto detect)") orelse get_git_commit(b);
+    const sdl3_path = b.option([]const u8, "sdl3-path", "Path to a SDL3 dev distribution. Used to locate SDL3 import libs/DLL on Windows when SDL3 is not installed system-wide. Ignored on other platforms.");
 
     const dc_options = b.addOptions();
     dc_options.addOption(bool, "mmu", mmu);
@@ -130,12 +131,32 @@ pub fn build(b: *std.Build) !void {
             deecy_module.linkSystemLibrary("dwmapi", .{});
             // Windows Multimedia API for timeBeginPeriod
             deecy_module.linkSystemLibrary("winmm", .{});
-            // SDL2 is used as the controller input backend (see
-            // src/input/gamepad.zig). On Windows, SDL2 must be installed via
-            // the system SDK (MSYS2: `pacman -S mingw-w64-x86_64-SDL2`, or
-            // drop SDL2.dll + SDL2.lib under the compiler's default search
-            // paths). SDL2.dll must be shipped alongside Deecy.exe.
-            deecy_module.linkSystemLibrary("SDL2", .{});
+            // SDL3 is used as the controller input backend (see
+            // src/input/gamepad.zig). On Windows, SDL3 is not installed
+            // system-wide; you can either:
+            //   - Use MSYS2 (`pacman -S mingw-w64-x86_64-SDL3`), or
+            //   - Download the official MinGW dev distribution from
+            //     https://github.com/libsdl-org/SDL/releases (the file named
+            //     SDL3-devel-<version>-mingw.tar.gz), unpack it somewhere, and
+            //     pass `-Dsdl3-path=...\\x86_64-w64-mingw32` to `zig build`.
+            // SDL3.dll must be shipped alongside Deecy.exe at runtime.
+            if (sdl3_path) |p| {
+                deecy_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{p}) });
+                deecy_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{p}) });
+            }
+            deecy_module.linkSystemLibrary("SDL3", .{});
+            // Windows API libraries that SDL3 can reference internally. These
+            // are mostly relevant if a static SDL3 archive is used and are
+            // harmless when linking to the SDL3 import library.
+            deecy_module.linkSystemLibrary("setupapi", .{}); // SetupDi*
+            deecy_module.linkSystemLibrary("imm32", .{}); // Imm* (text input)
+            deecy_module.linkSystemLibrary("version", .{}); // GetFileVersionInfo*
+            deecy_module.linkSystemLibrary("cfgmgr32", .{}); // CM_*
+            deecy_module.linkSystemLibrary("advapi32", .{}); // registry
+            deecy_module.linkSystemLibrary("ole32", .{}); // OLE
+            deecy_module.linkSystemLibrary("oleaut32", .{}); // OLE Automation
+            deecy_module.linkSystemLibrary("uuid", .{}); // GUID symbols
+            deecy_module.linkSystemLibrary("shell32", .{}); // SHGetKnownFolderPath
 
             if (enable_dreampicoport) {
                 dc_module.addObjectFile(b.path("libs/dreampicoport-api/windows/libdream_pico_port_api.a"));
@@ -163,12 +184,12 @@ pub fn build(b: *std.Build) !void {
             b.getInstallStep().dependOn(&install_wrapper.step);
         },
         else => {
-            // SDL2 is used as the controller input backend on Linux/macOS
+            // SDL3 is used as the controller input backend on Linux/macOS
             // too. Install via your distribution (Debian/Ubuntu:
-            // `sudo apt install libsdl2-dev`; Fedora:
-            // `sudo dnf install SDL2-devel`; Arch: `sudo pacman -S sdl2`;
-            // macOS: `brew install sdl2`).
-            deecy_module.linkSystemLibrary("SDL2", .{ .needed = true });
+            // `sudo apt install libsdl3-dev`; Fedora:
+            // `sudo dnf install SDL3-devel`; Arch: `sudo pacman -S sdl3`;
+            // macOS: `brew install sdl3`).
+            deecy_module.linkSystemLibrary("SDL3", .{ .needed = true });
 
             if (enable_dreampicoport) {
                 dc_module.addObjectFile(b.path("libs/dreampicoport-api/linux/libdream_pico_port_api.a"));

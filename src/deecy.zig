@@ -471,7 +471,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
     _ = zglfw.setErrorCallback(glfw_error_callback);
     try zglfw.init();
 
-    // Initialize the SDL2-backed gamepad subsystem. We do this eagerly (before
+    // Initialize the SDL3-backed gamepad subsystem. We do this eagerly (before
     // the window thread starts below) so auto_populate_joysticks can enumerate
     // from a ready state. Failure is non-fatal: keyboard input keeps working.
     Gamepad.init() catch |err| {
@@ -700,6 +700,7 @@ fn auto_populate_joysticks(self: *@This()) !void {
     Gamepad.update();
     var curr_pad: usize = 0;
     var it = Gamepad.iterate();
+    defer it.deinit();
     while (it.next()) |joystick| {
         if (joystick.asGamepad()) |_| {
             self.controllers[curr_pad] = .{ .id = joystick };

@@ -947,6 +947,7 @@ pub fn draw(self: *@This()) !void {
 
                     {
                         var it = Gamepad.iterate();
+                        defer it.deinit();
                         while (it.next()) |joystick| {
                             if (joystick.asGamepad()) |gamepad| {
                                 available_controllers.appendAssumeCapacity(.{ .id = joystick, .name = gamepad.getName() });
