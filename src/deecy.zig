@@ -11,6 +11,69 @@ const zgui = @import("zgui");
 const zaudio = @import("zaudio");
 
 extern fn glfwSetWindowIcon(window: *zglfw.Window, count: i32, images: [*]const zglfw.Image) void;
+
+extern fn glfwGetWindowAttrib(window: *zglfw.Window, attrib: i32) i32;
+extern fn glfwGetWindowMonitor(window: *zglfw.Window) ?*anyopaque;
+extern fn glfwSetJoystickCallback(
+    callback: ?*const fn (jid: i32, event: i32) callconv(.c) void,
+) ?*const fn (jid: i32, event: i32) callconv(.c) void;
+extern fn glfwSetWindowFocusCallback(
+    window: *zglfw.Window,
+    callback: ?*const fn (window: *zglfw.Window, focused: i32) callconv(.c) void,
+) ?*const fn (window: *zglfw.Window, focused: i32) callconv(.c) void;
+extern fn glfwSetWindowIconifyCallback(
+    window: *zglfw.Window,
+    callback: ?*const fn (window: *zglfw.Window, iconified: i32) callconv(.c) void,
+) ?*const fn (window: *zglfw.Window, iconified: i32) callconv(.c) void;
+extern fn glfwSetWindowMaximizeCallback(
+    window: *zglfw.Window,
+    callback: ?*const fn (window: *zglfw.Window, maximized: i32) callconv(.c) void,
+) ?*const fn (window: *zglfw.Window, maximized: i32) callconv(.c) void;
+extern fn glfwSetWindowPosCallback(
+    window: *zglfw.Window,
+    callback: ?*const fn (window: *zglfw.Window, xpos: i32, ypos: i32) callconv(.c) void,
+) ?*const fn (window: *zglfw.Window, xpos: i32, ypos: i32) callconv(.c) void;
+extern fn glfwSetWindowSizeCallback(
+    window: *zglfw.Window,
+    callback: ?*const fn (window: *zglfw.Window, width: i32, height: i32) callconv(.c) void,
+) ?*const fn (window: *zglfw.Window, width: i32, height: i32) callconv(.c) void;
+extern fn glfwSetWindowRefreshCallback(
+    window: *zglfw.Window,
+    callback: ?*const fn (window: *zglfw.Window) callconv(.c) void,
+) ?*const fn (window: *zglfw.Window) callconv(.c) void;
+
+extern fn glfwJoystickPresent(jid: i32) i32;
+extern fn glfwJoystickIsGamepad(jid: i32) i32;
+extern fn glfwGetJoystickName(jid: i32) ?[*:0]const u8;
+extern fn glfwGetJoystickGUID(jid: i32) ?[*:0]const u8;
+extern fn glfwGetGamepadName(jid: i32) ?[*:0]const u8;
+extern fn glfwGetJoystickAxes(jid: i32, count: *i32) ?[*]const f32;
+extern fn glfwGetJoystickButtons(jid: i32, count: *i32) ?[*]const u8;
+extern fn glfwGetJoystickHats(jid: i32, count: *i32) ?[*]const u8;
+extern fn glfwGetGamepadState(jid: i32, state: *GLFWgamepadstate) i32;
+
+const GLFWgamepadstate = extern struct {
+    buttons: [15]u8,
+    axes: [6]f32,
+};
+
+const GLFW_FOCUSED = 0x00020001;
+const GLFW_ICONIFIED = 0x00020002;
+const GLFW_RESIZABLE = 0x00020003;
+const GLFW_VISIBLE = 0x00020004;
+const GLFW_DECORATED = 0x00020005;
+const GLFW_AUTO_ICONIFY = 0x00020006;
+const GLFW_FLOATING = 0x00020007;
+const GLFW_MAXIMIZED = 0x00020008;
+const GLFW_CENTER_CURSOR = 0x00020009;
+const GLFW_TRANSPARENT_FRAMEBUFFER = 0x0002000A;
+const GLFW_HOVERED = 0x0002000B;
+const GLFW_FOCUS_ON_SHOW = 0x0002000C;
+const GLFW_CONNECTED = 0x00040001;
+const GLFW_DISCONNECTED = 0x00040002;
+
+var diagnostic_joystick_callback_app: ?*Self = null;
+
 const icon_48_data = @embedFile("assets/icon-48.rgba");
 const icon_32_data = @embedFile("assets/icon-32.rgba");
 const icon_16_data = @embedFile("assets/icon-small-16.rgba");
@@ -44,6 +107,245 @@ const deecy_log = std.log.scoped(.deecy);
 
 fn glfw_error_callback(zglfw_error: zglfw.ErrorCode, desc: ?[*:0]const u8) callconv(.c) void {
     deecy_log.err("GLFW error {X}: {s}", .{ zglfw_error, desc orelse "(no description)" });
+}
+
+fn diagnostic_bool_attrib(window: *zglfw.Window, attrib: i32) bool {
+    return glfwGetWindowAttrib(window, attrib) != 0;
+}
+
+fn diagnostic_joystick_event_name(event: i32) []const u8 {
+    return switch (event) {
+        GLFW_CONNECTED => "connected",
+        GLFW_DISCONNECTED => "disconnected",
+        else => "unknown",
+    };
+}
+
+fn diagnostic_cstr(ptr: ?[*:0]const u8) []const u8 {
+    if (ptr) |value| return std.mem.span(value);
+    return "(null)";
+}
+
+fn diagnostic_axes_value(axes: ?[*]const f32, count: i32, idx: usize) f32 {
+    if (axes) |values| {
+        if (idx < @as(usize, @intCast(@max(count, 0)))) return values[idx];
+    }
+    return 0.0;
+}
+
+fn diagnostic_button_mask(buttons: ?[*]const u8, count: i32, max_buttons: usize) u32 {
+    var mask: u32 = 0;
+    if (buttons) |values| {
+        const n: usize = @min(@as(usize, @intCast(@max(count, 0))), @min(max_buttons, 32));
+        for (0..n) |i| {
+            if (values[i] != 0) mask |= @as(u32, 1) << @intCast(i);
+        }
+    }
+    return mask;
+}
+
+fn diagnostic_pressed_count(buttons: ?[*]const u8, count: i32) u32 {
+    var pressed: u32 = 0;
+    if (buttons) |values| {
+        const n: usize = @as(usize, @intCast(@max(count, 0)));
+        for (0..n) |i| {
+            if (values[i] != 0) pressed += 1;
+        }
+    }
+    return pressed;
+}
+
+fn glfw_window_focus_diagnostic_callback(window: *zglfw.Window, focused: i32) callconv(.c) void {
+    deecy_log.info("DIAG glfw_window_focus focused={}", .{focused != 0});
+    if (window.getUserPointer(@This())) |app| app.diagnostic_log_window_state("glfw_window_focus_callback");
+}
+
+fn glfw_window_iconify_diagnostic_callback(window: *zglfw.Window, iconified: i32) callconv(.c) void {
+    deecy_log.info("DIAG glfw_window_iconify iconified={}", .{iconified != 0});
+    if (window.getUserPointer(@This())) |app| app.diagnostic_log_window_state("glfw_window_iconify_callback");
+}
+
+fn glfw_window_maximize_diagnostic_callback(window: *zglfw.Window, maximized: i32) callconv(.c) void {
+    deecy_log.info("DIAG glfw_window_maximize maximized={}", .{maximized != 0});
+    if (window.getUserPointer(@This())) |app| app.diagnostic_log_window_state("glfw_window_maximize_callback");
+}
+
+fn glfw_window_pos_diagnostic_callback(window: *zglfw.Window, xpos: i32, ypos: i32) callconv(.c) void {
+    deecy_log.info("DIAG glfw_window_pos xpos={d} ypos={d}", .{ xpos, ypos });
+    if (window.getUserPointer(@This())) |app| app.diagnostic_log_window_state("glfw_window_pos_callback");
+}
+
+fn glfw_window_size_diagnostic_callback(window: *zglfw.Window, width: i32, height: i32) callconv(.c) void {
+    deecy_log.info("DIAG glfw_window_size width={d} height={d}", .{ width, height });
+    if (window.getUserPointer(@This())) |app| app.diagnostic_log_window_state("glfw_window_size_callback");
+}
+
+fn glfw_window_refresh_diagnostic_callback(window: *zglfw.Window) callconv(.c) void {
+    deecy_log.info("DIAG glfw_window_refresh", .{});
+    if (window.getUserPointer(@This())) |app| app.diagnostic_log_window_state("glfw_window_refresh_callback");
+}
+
+fn glfw_joystick_diagnostic_callback(jid: i32, event: i32) callconv(.c) void {
+    deecy_log.info("DIAG glfw_joystick_callback jid={d} event={s}", .{ jid, diagnostic_joystick_event_name(event) });
+
+    if (diagnostic_joystick_callback_app) |app| {
+        app.diagnostic_log_joystick_snapshot("glfw_joystick_callback");
+    }
+}
+
+pub fn diagnostic_log_joystick_snapshot(self: *@This(), label: []const u8) void {
+    _ = self;
+
+    var present_count: u32 = 0;
+    var gamepad_count: u32 = 0;
+
+    for (0..zglfw.Joystick.maximum_supported) |idx| {
+        const jid: i32 = @intCast(idx);
+        const present = glfwJoystickPresent(jid) != 0;
+        if (!present) continue;
+
+        present_count += 1;
+        const is_gamepad = glfwJoystickIsGamepad(jid) != 0;
+        if (is_gamepad) gamepad_count += 1;
+
+        var axes_count: i32 = 0;
+        const axes = glfwGetJoystickAxes(jid, &axes_count);
+        var button_count: i32 = 0;
+        const buttons = glfwGetJoystickButtons(jid, &button_count);
+        var hat_count: i32 = 0;
+        const hats = glfwGetJoystickHats(jid, &hat_count);
+
+        var hat_mask: u32 = 0;
+        if (hats) |values| {
+            const n: usize = @min(@as(usize, @intCast(@max(hat_count, 0))), 8);
+            for (0..n) |hat_idx| {
+                hat_mask |= @as(u32, values[hat_idx]) << @intCast(hat_idx * 4);
+            }
+        }
+
+        deecy_log.info(
+            "DIAG joystick label={s} jid={d} present=true gamepad={} name='{s}' guid='{s}' gamepad_name='{s}' axes_count={d} axes0={d:.4} axes1={d:.4} axes2={d:.4} axes3={d:.4} axes4={d:.4} axes5={d:.4} button_count={d} pressed_count={d} button_mask_32=0x{X} hat_count={d} hat_mask=0x{X}",
+            .{ label, jid, is_gamepad, diagnostic_cstr(glfwGetJoystickName(jid)), diagnostic_cstr(glfwGetJoystickGUID(jid)), diagnostic_cstr(glfwGetGamepadName(jid)), axes_count, diagnostic_axes_value(axes, axes_count, 0), diagnostic_axes_value(axes, axes_count, 1), diagnostic_axes_value(axes, axes_count, 2), diagnostic_axes_value(axes, axes_count, 3), diagnostic_axes_value(axes, axes_count, 4), diagnostic_axes_value(axes, axes_count, 5), button_count, diagnostic_pressed_count(buttons, button_count), diagnostic_button_mask(buttons, button_count, 32), hat_count, hat_mask },
+        );
+
+        if (is_gamepad) {
+            var state: GLFWgamepadstate = undefined;
+            const ok = glfwGetGamepadState(jid, &state) != 0;
+            var gamepad_button_mask: u32 = 0;
+            var gamepad_pressed_count: u32 = 0;
+            if (ok) {
+                for (state.buttons, 0..) |pressed, button_idx| {
+                    if (pressed != 0) {
+                        gamepad_button_mask |= @as(u32, 1) << @intCast(button_idx);
+                        gamepad_pressed_count += 1;
+                    }
+                }
+            }
+            deecy_log.info(
+                "DIAG gamepad_state label={s} jid={d} ok={} pressed_count={d} button_mask=0x{X} axis_left_x={d:.4} axis_left_y={d:.4} axis_right_x={d:.4} axis_right_y={d:.4} axis_lt={d:.4} axis_rt={d:.4}",
+                .{ label, jid, ok, gamepad_pressed_count, gamepad_button_mask, if (ok) state.axes[0] else 0.0, if (ok) state.axes[1] else 0.0, if (ok) state.axes[2] else 0.0, if (ok) state.axes[3] else 0.0, if (ok) state.axes[4] else 0.0, if (ok) state.axes[5] else 0.0 },
+            );
+        }
+    }
+
+    deecy_log.info("DIAG joystick_summary label={s} present_count={d} gamepad_count={d}", .{ label, present_count, gamepad_count });
+}
+
+pub fn diagnostic_log_monitor_snapshot(self: *@This(), label: []const u8) void {
+    _ = self;
+
+    const monitors = zglfw.Monitor.getAll();
+    deecy_log.info("DIAG monitors label={s} count={d}", .{ label, monitors.len });
+
+    for (monitors, 0..) |monitor, idx| {
+        const pos = monitor.getPos();
+        if (monitor.getVideoMode()) |mode| {
+            deecy_log.info(
+                "DIAG monitor label={s} idx={d} pos={d},{d} mode={d}x{d}@{d}",
+                .{ label, idx, pos[0], pos[1], mode.width, mode.height, mode.refresh_rate },
+            );
+        } else |err| {
+            deecy_log.warn("DIAG monitor label={s} idx={d} getVideoMode_error={t}", .{ label, idx, err });
+        }
+    }
+}
+
+pub fn diagnostic_log_window_state(self: *@This(), label: []const u8) void {
+    const pos = self.window.getPos();
+    const size = self.window.getSize();
+    const fb_size = self.window.getFramebufferSize();
+    const scale = self.window.getContentScale();
+    const glfw_fullscreen = glfwGetWindowMonitor(self.window) != null;
+
+    deecy_log.info(
+        "DIAG window label={s} running={} display_ui={} config_fullscreen={} glfw_fullscreen={} focused={} visible={} iconified={} maximized={} hovered={} resizable={} decorated={} auto_iconify={} floating={} transparent_fb={} focus_on_show={} pos={d},{d} size={d}x{d} fb={d}x{d} scale={d:.3}x{d:.3} present_mode={t} frame_limiter={t} previous_window={d},{d},{d}x{d}",
+        .{
+            label,
+            self.running,
+            self.display_ui,
+            self.config.fullscreen,
+            glfw_fullscreen,
+            diagnostic_bool_attrib(self.window, GLFW_FOCUSED),
+            diagnostic_bool_attrib(self.window, GLFW_VISIBLE),
+            diagnostic_bool_attrib(self.window, GLFW_ICONIFIED),
+            diagnostic_bool_attrib(self.window, GLFW_MAXIMIZED),
+            diagnostic_bool_attrib(self.window, GLFW_HOVERED),
+            diagnostic_bool_attrib(self.window, GLFW_RESIZABLE),
+            diagnostic_bool_attrib(self.window, GLFW_DECORATED),
+            diagnostic_bool_attrib(self.window, GLFW_AUTO_ICONIFY),
+            diagnostic_bool_attrib(self.window, GLFW_FLOATING),
+            diagnostic_bool_attrib(self.window, GLFW_TRANSPARENT_FRAMEBUFFER),
+            diagnostic_bool_attrib(self.window, GLFW_FOCUS_ON_SHOW),
+            pos[0],
+            pos[1],
+            size[0],
+            size[1],
+            fb_size[0],
+            fb_size[1],
+            scale[0],
+            scale[1],
+            self.config.present_mode,
+            self.config.frame_limiter,
+            self.previous_window_position.x,
+            self.previous_window_position.y,
+            self.previous_window_position.w,
+            self.previous_window_position.h,
+        },
+    );
+}
+
+pub fn diagnostic_log_runtime_state(
+    self: *@This(),
+    label: []const u8,
+    elapsed_ms: u64,
+    frame_count: u64,
+    surface_reconfigured_count: u64,
+    last_present_surface_reconfigured: bool,
+    limiter_ns_per_frame: u64,
+) void {
+    const target_refresh = self.dc.target_refresh_rate();
+    const target_ns_per_frame = target_refresh.ns_per_frame();
+    const target_hz_x100: u64 = if (target_ns_per_frame != 0) @divTrunc(100_000_000_000, target_ns_per_frame) else 0;
+
+    self.diagnostic_log_window_state(label);
+    self.diagnostic_log_joystick_snapshot(label);
+
+    deecy_log.info(
+        "DIAG runtime label={s} elapsed_ms={d} frame_count={d} surface_reconfigured_count={d} last_present_surface_reconfigured={} limiter_ns_per_frame={d} dc_target_refresh={t} dc_target_ns_per_frame={d} dc_target_hz_x100={d} dc_cable={t} dc_framebuffer_enabled={}",
+        .{
+            label,
+            elapsed_ms,
+            frame_count,
+            surface_reconfigured_count,
+            last_present_surface_reconfigured,
+            limiter_ns_per_frame,
+            target_refresh,
+            target_ns_per_frame,
+            target_hz_x100,
+            self.dc.cable_type,
+            self.dc.gpu.read_register(DreamcastModule.HollyModule.FB_R_CTRL, .FB_R_CTRL).enable,
+        },
+    );
 }
 
 fn glfw_key_callback(window: *zglfw.Window, key: zglfw.Key, scancode: i32, action: zglfw.Action, mods: zglfw.Mods) callconv(.c) void {
@@ -135,6 +437,13 @@ fn glfw_drop_callback(window: *zglfw.Window, count: i32, paths: [*][*:0]const u8
 fn glfw_resize_callback(window: *zglfw.Window, width: i32, height: i32) callconv(.c) void {
     const maybe_app = window.getUserPointer(@This());
     if (maybe_app) |app| {
+        const win_size = app.window.getSize();
+        const fb_size = app.window.getFramebufferSize();
+        deecy_log.info(
+            "DIAG glfw_framebuffer_resize callback_width={d} callback_height={d} window_size={d}x{d} framebuffer_before={d}x{d} config_fullscreen={}",
+            .{ width, height, win_size[0], win_size[1], fb_size[0], fb_size[1], app.config.fullscreen },
+        );
+
         app.gctx_queue_mutex.lockUncancelable(app.io);
         defer app.gctx_queue_mutex.unlock(app.io);
         if (width > 0 and height > 0) {
@@ -466,6 +775,24 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
     custom_log.set_output(config.log_output);
 
     deecy_log.info("Deecy {s} {s} {t} (Commit {s})", .{ comptime_config.version, helpers.title_case_enum(builtin.os.tag), comptime_config.optimize, comptime_config.git_commit });
+    deecy_log.info(
+        "DIAG config_loaded fullscreen={} window_size={d}x{d} present_mode={t} frame_limiter={t} log_output={t} renderer_sync={} renderer_delay={} video_cable={t} region={t}",
+        .{
+            config.fullscreen,
+            config.window_size.width,
+            config.window_size.height,
+            config.present_mode,
+            config.frame_limiter,
+            config.log_output,
+            config.renderer.synchronous_render,
+            config.renderer.delay_render,
+            config.video_cable,
+            config.region,
+        },
+    );
+    for (config.controllers, 0..) |controller, idx| {
+        deecy_log.info("DIAG config_controller idx={d} enabled={} device={s}", .{ idx, controller.enabled, @tagName(controller.device) });
+    }
 
     _ = zglfw.setErrorCallback(glfw_error_callback);
     try zglfw.init();
@@ -501,15 +828,27 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
                 zglfw.windowHint(.visible, false);
 
             self.window = try zglfw.Window.create(@intCast(config.window_size.width), @intCast(config.window_size.height), "Deecy", null, null);
+            self.diagnostic_log_window_state("after_window_create");
+            self.diagnostic_log_monitor_snapshot("after_window_create");
+
             glfwSetWindowIcon(self.window, icons.len, &icons);
             if (builtin.os.tag == .windows)
                 @import("dwmapi.zig").allow_dark_mode(self.window, true);
             if (self.config.fullscreen) {
                 self.config.fullscreen = false;
                 self.toggle_fullscreen();
+                self.diagnostic_log_window_state("after_initial_toggle_fullscreen");
             }
 
             self.window.setUserPointer(self);
+            diagnostic_joystick_callback_app = self;
+            _ = glfwSetJoystickCallback(glfw_joystick_diagnostic_callback);
+            _ = glfwSetWindowFocusCallback(self.window, glfw_window_focus_diagnostic_callback);
+            _ = glfwSetWindowIconifyCallback(self.window, glfw_window_iconify_diagnostic_callback);
+            _ = glfwSetWindowMaximizeCallback(self.window, glfw_window_maximize_diagnostic_callback);
+            _ = glfwSetWindowPosCallback(self.window, glfw_window_pos_diagnostic_callback);
+            _ = glfwSetWindowSizeCallback(self.window, glfw_window_size_diagnostic_callback);
+            _ = glfwSetWindowRefreshCallback(self.window, glfw_window_refresh_diagnostic_callback);
             _ = self.window.setKeyCallback(glfw_key_callback);
             _ = self.window.setMouseButtonCallback(glfw_mouse_button_callback);
             _ = self.window.setCursorPosCallback(glfw_cursor_pos_callback);
@@ -524,6 +863,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
         {
             const gctx_start_time = std.Io.Clock.awake.now(self.io);
             defer deecy_log.info("Graphics context initialized in {f}", .{gctx_start_time.durationTo(std.Io.Clock.awake.now(self.io))});
+            self.diagnostic_log_window_state("before_graphics_context_create");
             self.gctx = try zgpu.GraphicsContext.create(allocator, .{
                 .window = self.window,
                 .fn_getTime = @ptrCast(&zglfw.getTime),
@@ -557,7 +897,9 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
             var surface: zgpu.wgpu.SurfaceTexture = undefined;
             self.gctx.surface.getCurrentTexture(&surface);
             _ = self.gctx.present();
+            self.diagnostic_log_window_state("after_initial_black_present_before_show");
             self.window.show();
+            self.diagnostic_log_window_state("after_window_show");
         }
 
         if (comptime std.log.logEnabled(.debug, .deecy)) {
@@ -583,6 +925,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
     }
 
     try self.ui_init(); // Init UI early to have a chance to display errors.
+    self.diagnostic_log_window_state("after_ui_init");
 
     // Avoid having other threads running while initialisation the Dreamcast to increase the chance of virtual_address_space initialization to succeed on Windows.
     // FIXME: See sh4_virtual_address_space_windows.zig
@@ -619,6 +962,7 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
         self.dc.aica.dsp_emulation = config.dsp_emulation;
     }
 
+    self.diagnostic_log_window_state("before_renderer_create");
     self.renderer = try .create(self._allocator, self.io, self.gctx, &self.gctx_queue_mutex, &self.config.renderer);
     self.dc.on_render_start = .{
         .function = @ptrCast(&Renderer.on_render_start),
@@ -639,6 +983,8 @@ pub fn create(allocator: std.mem.Allocator, io: std.Io, flags: packed struct { w
 
     try self.check_save_state_slots();
 
+    self.diagnostic_log_window_state("create_return");
+    self.diagnostic_log_joystick_snapshot("create_return");
     return self;
 }
 
@@ -669,6 +1015,15 @@ pub fn destroy(self: *@This()) void {
 
     self.gctx.destroy(self._allocator);
 
+    _ = glfwSetJoystickCallback(null);
+    _ = glfwSetWindowFocusCallback(self.window, null);
+    _ = glfwSetWindowIconifyCallback(self.window, null);
+    _ = glfwSetWindowMaximizeCallback(self.window, null);
+    _ = glfwSetWindowPosCallback(self.window, null);
+    _ = glfwSetWindowSizeCallback(self.window, null);
+    _ = glfwSetWindowRefreshCallback(self.window, null);
+    diagnostic_joystick_callback_app = null;
+
     self.window.destroy();
     zglfw.terminate();
 
@@ -686,18 +1041,23 @@ fn deinit_enabled_cheats(self: *@This()) void {
 fn auto_populate_joysticks(self: *@This()) !void {
     const start_time = std.Io.Clock.awake.now(self.io);
     defer deecy_log.info("Joysticks initialized in {f}", .{start_time.durationTo(std.Io.Clock.awake.now(self.io))});
+    self.diagnostic_log_joystick_snapshot("auto_populate_begin");
+
     var curr_pad: usize = 0;
     for (0..zglfw.Joystick.maximum_supported) |idx| {
         const joystick: zglfw.Joystick = @enumFromInt(idx);
         if (joystick.isPresent()) {
             if (joystick.asGamepad()) |_| {
                 self.controllers[curr_pad] = .{ .id = joystick };
+                deecy_log.info("DIAG auto_populate_assign slot={d} jid={d}", .{ curr_pad, idx });
                 curr_pad += 1;
                 if (curr_pad >= 4)
                     break;
             }
         }
     }
+
+    deecy_log.info("DIAG auto_populate_end assigned_count={d}", .{curr_pad});
 }
 
 fn audio_init(self: *@This()) !void {
@@ -1225,14 +1585,20 @@ pub fn update_dc_keyboard(self: *@This(), key: zglfw.Key, action: zglfw.Action) 
 }
 
 pub fn load_and_start(self: *@This(), path: []const u8) !void {
+    deecy_log.info("DIAG load_and_start path='{s}'", .{path});
+    self.diagnostic_log_window_state("load_and_start_before_pause");
     self.pause();
     try self.load_disc(path);
     try self.dc.reset();
+    self.diagnostic_log_window_state("load_and_start_before_start");
     self.start();
     self.set_display_ui(false);
+    self.diagnostic_log_window_state("load_and_start_after_set_display_ui_false");
 }
 
 pub fn load_disc(self: *@This(), path: []const u8) !void {
+    deecy_log.info("DIAG load_disc_begin path='{s}'", .{path});
+    self.diagnostic_log_window_state("load_disc_begin");
     const tmp: DreamcastModule.GDROM.Disc = try .init(self._allocator, self.io, path);
     if (self.dc.gdrom.disc) |*disc| disc.deinit(self._allocator, self.io);
     self.dc.gdrom.disc = tmp;
@@ -1286,6 +1652,7 @@ pub fn load_disc(self: *@This(), path: []const u8) !void {
     try title.append(self._allocator, ')');
     try title.append(self._allocator, 0);
     self.window.setTitle(title.items[0 .. title.items.len - 1 :0]);
+    self.diagnostic_log_window_state("load_disc_end_after_set_title");
 }
 
 pub fn get_product_name(self: *const @This()) []const u8 {
@@ -1335,9 +1702,12 @@ pub fn toggle_debug_ui(self: *@This()) void {
     self.config.display_debug_ui = !self.config.display_debug_ui;
 }
 pub fn toggle_fullscreen(self: *@This()) void {
+    self.diagnostic_log_window_state("toggle_fullscreen_before");
+
     if (self.config.fullscreen) {
         self.config.fullscreen = false;
         self.window.setMonitor(null, self.previous_window_position.x, self.previous_window_position.y, self.previous_window_position.w, self.previous_window_position.h, 0);
+        self.diagnostic_log_window_state("toggle_fullscreen_after_windowed");
     } else {
         self.previous_window_position = .{ .x = self.window.getPos()[0], .y = self.window.getPos()[1], .w = self.window.getSize()[0], .h = self.window.getSize()[1] };
         // Search the monitor with largest overlap with our current window.
@@ -1358,8 +1728,10 @@ pub fn toggle_fullscreen(self: *@This()) void {
             }
         }
         const mode = monitor.getVideoMode() catch |err| return deecy_log.err(termcolor.red("Failed to get video mode: {}"), .{err});
+        deecy_log.info("DIAG toggle_fullscreen_selected_monitor mode={d}x{d}@{d}", .{ mode.width, mode.height, mode.refresh_rate });
         self.window.setMonitor(monitor, 0, 0, mode.width, mode.height, mode.refresh_rate);
         self.config.fullscreen = true;
+        self.diagnostic_log_window_state("toggle_fullscreen_after_fullscreen");
     }
 }
 pub fn toggle_realtime(self: *@This()) void {
@@ -1398,6 +1770,9 @@ pub fn load_state_idx(comptime idx: u8) fn (*Self) void {
 pub fn start(self: *@This()) void {
     defer self.check_cursor_state();
     if (!self.running) {
+        self.diagnostic_log_window_state("start_before_thread");
+        self.diagnostic_log_joystick_snapshot("start_before_thread");
+
         if (!self.realtime) {
             self.running = true;
             self._dc_thread = std.Thread.spawn(.{}, dc_thread_loop, .{self}) catch |err| {
@@ -1420,6 +1795,9 @@ pub fn start(self: *@This()) void {
                 return;
             };
         }
+
+        self.diagnostic_log_window_state("start_after_thread");
+        self.diagnostic_log_joystick_snapshot("start_after_thread");
     }
 }
 
@@ -1468,9 +1846,11 @@ fn check_cursor_state(self: *@This()) void {
 
 pub fn on_resize(self: *@This()) void {
     const fb_size = self.window.getFramebufferSize();
+    deecy_log.info("DIAG on_resize framebuffer={d}x{d} config_fullscreen={}", .{ fb_size[0], fb_size[1], self.config.fullscreen });
     if (!self.config.fullscreen) {
         self.config.window_size.width = @intCast(fb_size[0]);
         self.config.window_size.height = @intCast(fb_size[1]);
+        deecy_log.info("DIAG on_resize_saved_window_size width={d} height={d}", .{ self.config.window_size.width, self.config.window_size.height });
     }
 }
 

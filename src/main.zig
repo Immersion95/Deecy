@@ -95,6 +95,39 @@ pub fn main(init: std.process.Init) !void {
 
     var args_iterator = try init.minimal.args.iterateAllocator(allocator);
     defer args_iterator.deinit();
+
+    // On Windows, init.minimal.args.vector is UTF-16. Always use the allocator
+    // iterator here so diagnostic argv logging is UTF-8 and does not affect
+    // normal argument parsing below.
+    var diagnostic_args_iterator = try init.minimal.args.iterateAllocator(allocator);
+    defer diagnostic_args_iterator.deinit();
+    var diagnostic_arg_idx: usize = 0;
+    while (diagnostic_args_iterator.next()) |arg| {
+        std.log.info("DIAG argv idx={d} value='{s}'", .{ diagnostic_arg_idx, arg });
+        diagnostic_arg_idx += 1;
+    }
+
+    const diagnostic_env_names = [_][]const u8{
+        "SteamAppId",
+        "SteamGameId",
+        "SteamOverlayGameId",
+        "SteamClientLaunch",
+        "SteamStreaming",
+        "SteamTenfoot",
+        "SteamDeck",
+        "SteamCompatDataPath",
+        "SDL_GAMECONTROLLERCONFIG",
+        "SDL_VIDEODRIVER",
+        "DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1",
+    };
+    for (diagnostic_env_names) |env_name| {
+        if (init.environ_map.get(env_name)) |value| {
+            std.log.info("DIAG env {s}='{s}'", .{ env_name, value });
+        } else {
+            std.log.info("DIAG env {s}=(unset)", .{env_name});
+        }
+    }
+
     _ = args_iterator.skip();
     while (args_iterator.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "-")) {
@@ -162,6 +195,11 @@ pub fn main(init: std.process.Init) !void {
             }
         }
     }
+
+    std.log.info(
+        "DIAG parsed_args binary_path={} ip_bin_path={} disc_path={} skip_bios={} start_immediately={} force_stop={} force_render={} realtime={} wayland={}",
+        .{ binary_path != null, ip_bin_path != null, disc_path != null, skip_bios, start_immediately, force_stop, force_render, d.realtime, wayland },
+    );
 
     if (binary_path) |path| {
         // FIXME: I'd rather be using LLE syscalls here,
@@ -254,7 +292,10 @@ pub fn main(init: std.process.Init) !void {
 
     if (!force_stop and start_immediately) {
         d.wait_async_jobs();
+        d.diagnostic_log_window_state("main_before_start_immediately");
+        d.diagnostic_log_joystick_snapshot("main_before_start_immediately");
         d.start();
+        d.diagnostic_log_window_state("main_after_start_immediately");
     }
 
     // Request 1ms timer resolution on Windows.
@@ -265,6 +306,15 @@ pub fn main(init: std.process.Init) !void {
 
     var precise_sleep: PreciseSleep = .init(io);
     defer precise_sleep.deinit();
+
+    const diagnostic_start_time = zglfw.getTime();
+    var diagnostic_last_sample_time: f64 = -1000.0;
+    var diagnostic_frame_count: u64 = 0;
+    var diagnostic_surface_reconfigured_count: u64 = 0;
+
+    d.diagnostic_log_monitor_snapshot("main_loop_begin");
+    d.diagnostic_log_runtime_state("main_loop_begin", 0, diagnostic_frame_count, diagnostic_surface_reconfigured_count, false, 0);
+
     var then = zglfw.getTime();
     while (!d.window.shouldClose()) {
         zglfw.pollEvents();
@@ -314,11 +364,23 @@ pub fn main(init: std.process.Init) !void {
             defer d.gctx_queue_mutex.unlock(io);
             break :resized d.gctx.present() == .surface_reconfigured;
         };
-        if (resized)
+        diagnostic_frame_count += 1;
+        if (resized) {
+            diagnostic_surface_reconfigured_count += 1;
+            d.diagnostic_log_runtime_state(
+                "present_surface_reconfigured",
+                @intFromFloat((zglfw.getTime() - diagnostic_start_time) * 1000.0),
+                diagnostic_frame_count,
+                diagnostic_surface_reconfigured_count,
+                resized,
+                0,
+            );
             d.on_resize();
+        }
 
+        var ns_per_frame: u64 = 0;
         if (d.config.frame_limiter != .Off) {
-            const ns_per_frame: u64 = switch (d.config.frame_limiter) {
+            ns_per_frame = switch (d.config.frame_limiter) {
                 .Auto => d.dc.target_refresh_rate().ns_per_frame(),
                 .@"120Hz" => 8_333_333,
                 .@"100Hz" => 10_000_000,
@@ -327,6 +389,24 @@ pub fn main(init: std.process.Init) !void {
                 .@"50Hz" => 20_000_000,
                 .Off => unreachable,
             };
+        }
+
+        const diagnostic_now = zglfw.getTime();
+        const diagnostic_elapsed = diagnostic_now - diagnostic_start_time;
+        const diagnostic_interval: f64 = if (diagnostic_elapsed < 10.0) 0.10 else if (diagnostic_elapsed < 60.0) 0.50 else 5.0;
+        if (diagnostic_elapsed <= 180.0 and diagnostic_now - diagnostic_last_sample_time >= diagnostic_interval) {
+            diagnostic_last_sample_time = diagnostic_now;
+            d.diagnostic_log_runtime_state(
+                "periodic_180s",
+                @intFromFloat(diagnostic_elapsed * 1000.0),
+                diagnostic_frame_count,
+                diagnostic_surface_reconfigured_count,
+                resized,
+                ns_per_frame,
+            );
+        }
+
+        if (d.config.frame_limiter != .Off) {
             precise_sleep.wait_for_interval(io, ns_per_frame);
         }
     }
